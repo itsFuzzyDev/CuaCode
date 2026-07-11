@@ -1,0 +1,7 @@
+{
+  "properties": {
+    "x": {"type": "integer", "description": "target x coordinate (logical pixels)"},
+    "y": {"type": "integer", "description": "target y coordinate (logical pixels)"}
+  },
+  "required": ["x", "y"]
+}

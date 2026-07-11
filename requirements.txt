@@ -1,0 +1,8 @@
+mss
+pillow
+pyyaml
+ollama
+rich
+pyobjc-framework-Quartz; sys_platform == "darwin"
+pywin32; sys_platform == "win32"
+psutil; sys_platform == "win32"

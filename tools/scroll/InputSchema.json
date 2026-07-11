@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "x": {"type": "integer", "description": "x position to scroll at"},
+    "y": {"type": "integer", "description": "y position to scroll at"},
+    "dx": {"type": "integer", "default": 0, "description": "horizontal scroll amount, positive = right"},
+    "dy": {"type": "integer", "default": 0, "description": "vertical scroll amount, positive = down"}
+  },
+  "required": ["x", "y"]
+}

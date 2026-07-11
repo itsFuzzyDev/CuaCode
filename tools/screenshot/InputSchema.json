@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "grid_size": {
+      "type": "integer",
+      "description": "spacing between labeled gridlines in pixels",
+      "default": 100
+    }}, 
+  "required": []
+}

@@ -1,0 +1,9 @@
+{
+  "properties": {
+    "x": {"type": "integer", "description": "target x coordinate (logical pixels)"},
+    "y": {"type": "integer", "description": "target y coordinate (logical pixels)"},
+    "button": {"type": "string", "enum": ["left", "right", "middle"], "default": "left", "description": "which mouse button to click"},
+    "clicks": {"type": "integer", "default": 1, "description": "1 for single click, 2 for double-click"}
+  },
+  "required": ["x", "y"]
+}

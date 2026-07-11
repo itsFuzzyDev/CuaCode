@@ -1,0 +1,6 @@
+{
+  "properties": {
+    "app": {"type": "string", "description": "App name (e.g. 'Firefox'), or full path to an app/executable"}
+  },
+  "required": ["app"]
+}

@@ -1,0 +1,1 @@
+{"properties": {"combo": {"type": "string", "description": "key combo, e.g. 'cmd+c', 'ctrl+shift+t', 'escape'"}}, "required": ["combo"]}
