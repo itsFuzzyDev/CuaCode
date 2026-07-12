@@ -1,20 +1,21 @@
 import sys, os, time
 sys.path.insert(0, os.path.dirname(__file__))
-from handler.protocol import IPC
+from handler.protocol import IPC, Envelope
 
 ipc = IPC()
 ipc.send("status", {"state": "ready"})
 
 while True:
-    for cmd in ipc.poll():
-        action = cmd.get("data", {}).get("action")
+    for env in ipc.poll():
+        if env.type != "cmd": continue
+        action = env.data.get("action")
         if action == "stop":
-            ipc.send("status", {"state": "stopped"})
+            ipc.reply(env, "status", {"state": "stopped"})
             sys.exit(0)
         elif action == "pause":
-            ipc.send("status", {"state": "paused"})
+            ipc.reply(env, "status", {"state": "paused"})
         elif action == "inject":
-            ipc.send("you injected", {"state": "injected", "text": cmd["data"].get("text")})
+            ipc.reply(env, "status", {"state": "injected", "text": env.data.get("text"), "hi": "yes"})
         else:
-            ipc.send("status", {"state": "unknown_cmd", "action": action})
+            ipc.reply(env, "status", {"state": "unknown_cmd", "action": action})
     time.sleep(0.5)
