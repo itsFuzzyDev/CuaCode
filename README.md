@@ -11,14 +11,6 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## Tools
-
-- `screenshot` — capture with grid overlay
-- `mouse_move`, `click`, `scroll` — pointer control
-- `type_text`, `key` — keyboard input
-- `wait` — pause for UI
-- `app_open`, `app_list` — app control
-
 ## Providers
 
 Ollama (default), Anthropic, OpenAI, Gemini. Set in `main.py`:
