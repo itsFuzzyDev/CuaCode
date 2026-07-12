@@ -1,0 +1,11 @@
+{
+    "properties": {
+        "action": {"type": "string", "enum": ["add", "done", "list", "delete", "clear"], 
+        "description": "Operation to perform"}, 
+        "task": {"type": "string", 
+        "description": "Task description (required for add)"}, 
+        "id": {"type": "integer", "description": "Task ID (required for done, delete)"}, 
+        "status": {"type": "string", "enum": ["all", "pending", "done"], 
+        "description": "Filter for list action (default: all)"}}, 
+    "required": ["action"]
+}
