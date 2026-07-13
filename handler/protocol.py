@@ -1,4 +1,4 @@
-import json, queue, sys, threading, time, uuid
+import json, os, queue, sys, threading, time, uuid
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -21,6 +21,9 @@ class IPC:
         self.inbox: queue.Queue[Envelope] = queue.Queue()
         self._lock = threading.Lock()
         self._pending: dict[str, Callable[[Envelope], None]] = {}
+        self.terminal_info: dict = {}
+        _sp = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'system_prompt.txt')
+        self.messages: list[dict] = [{"role": "system", "content": open(_sp, 'r').read()}]
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
@@ -29,6 +32,10 @@ class IPC:
             if not line: continue
             try:
                 env = Envelope.from_dict(json.loads(line))
+                
+                # important, sets terminal info directly from go instead of doing some really weird loops through python to get it, works much better.
+                if env.type == "terminal": self.terminal_info = env.data #; continue # only put if you dont want to recieve any terminal data into the main loop handler.
+
                 # If someone is waiting for this id via call(), hand it to them.
                 # Otherwise queue it for normal polling.
                 cb = self._pending.pop(env.id, None)
