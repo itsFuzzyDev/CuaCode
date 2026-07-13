@@ -44,6 +44,7 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = [{"role": "us
                 calls = parse_tool_calls({"message": {"tool_calls": tools}}, provider)
                 for call in calls:
                     result = dispatch(registry, call.name, call.args, ctx=ctx)
+                    yield {"type": "tool_output", "name": call.name, "result": result}
                     fmt = format_tool_result(call, result, provider)
                     if isinstance(fmt, list): messages.extend(fmt)
                     else: messages.append(fmt)

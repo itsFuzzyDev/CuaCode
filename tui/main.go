@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"tui/handler/protocol"
 
@@ -25,22 +28,46 @@ const (
 
 type shiftEnterMsg struct{}
 
+type statusData struct {
+	State       string // idle | running | tools | done | error
+	Msgs        int    // total messages in conversation
+	Turns       int    // assistant response turns completed
+	LastToken   string // last streaming token (truncated)
+	Error       string // last error text
+	ContextLeft int    // tokens remaining (populated by worker if reported)
+}
+
+type idleTimerMsg struct {
+	ID int
+}
+
+type thinkingTickMsg struct {
+	ID int
+}
+
 type model struct {
-	worker     *protocol.Worker
-	content    []string
-	wrapped    []string
-	inputRunes []rune
-	cursorPos  int // rune position in flat input
-	scroll     int // wrapped lines scrolled up from bottom
-	width      int
-	height     int
-	msgID      int
+	worker         *protocol.Worker
+	content        []string
+	wrapped        []string
+	inputRunes     []rune
+	cursorPos      int       // rune position in flat input
+	scroll         int       // wrapped lines scrolled up from bottom
+	width          int
+	height         int
+	msgID          int
+	status         statusData
+	lastInputTime  time.Time
+	idleTimerID    int
+	thinkingID     int
+	thinkingFrame  int
 }
 
 func initialModel() *model {
 	return &model{
-		content: make([]string, 0),
-		wrapped: make([]string, 0),
+		content:       make([]string, 0),
+		wrapped:       make([]string, 0),
+		status:        statusData{State: "idle"},
+		lastInputTime: time.Now(),
 	}
 }
 
@@ -158,8 +185,35 @@ func getTerminalInfo() protocol.TerminalData {
 	return t
 }
 
-func (m *model) sendChat(text string) {
+func startIdleTimer(id int) tea.Cmd {
+	return tea.Tick(time.Minute, func(t time.Time) tea.Msg {
+		return idleTimerMsg{ID: id}
+	})
+}
+
+func startThinking(id int) tea.Cmd {
+	return tea.Tick(120*time.Millisecond, func(t time.Time) tea.Msg {
+		return thinkingTickMsg{ID: id}
+	})
+}
+
+func (m *model) touchInput() tea.Cmd {
+	m.lastInputTime = time.Now()
+	if m.status.State == "done" {
+		m.idleTimerID++
+		return startIdleTimer(m.idleTimerID)
+	}
+	return nil
+}
+
+func (m *model) sendChat(text string) tea.Cmd {
 	m.msgID++
+	m.status.Msgs++
+	m.status.State = "running"
+	m.lastInputTime = time.Now()
+	m.idleTimerID++
+	m.thinkingID++
+	m.thinkingFrame = 0
 	data, _ := json.Marshal(protocol.CmdData{Action: "chat", Text: text})
 	env := protocol.Envelope{
 		Type: "cmd",
@@ -168,6 +222,7 @@ func (m *model) sendChat(text string) {
 	}
 	m.worker.SendEnv(env)
 	m.appendContent("> " + text)
+	return startThinking(m.thinkingID)
 }
 
 func (m *model) deleteWordBackward() int {
@@ -185,84 +240,66 @@ func (m *model) deleteWordBackward() int {
 }
 
 func (m *model) moveCursorLineUp() {
-	if m.cursorPos == 0 {
+	v := m.buildInputView()
+	if v.cursorLine <= 0 {
 		return
 	}
-	newlinePos := -1
-	for i := m.cursorPos - 1; i >= 0; i-- {
-		if m.inputRunes[i] == '\n' {
-			newlinePos = i
-			break
-		}
-	}
-	if newlinePos == -1 {
-		return
-	}
-	curLineStart := newlinePos + 1
-	col := m.cursorPos - curLineStart
+	cur := v.meta[v.cursorLine]
+	prev := v.meta[v.cursorLine-1]
 
-	prevNewlinePos := -1
-	for i := newlinePos - 1; i >= 0; i-- {
-		if m.inputRunes[i] == '\n' {
-			prevNewlinePos = i
-			break
-		}
+	// Preserve visual column (including prefix)
+	curCol := m.cursorPos - cur.startPos + cur.prefixLen
+	maxCol := prev.prefixLen + (prev.endPos - prev.startPos)
+	targetCol := curCol
+	if targetCol > maxCol {
+		targetCol = maxCol
 	}
-	prevLineStart := prevNewlinePos + 1
-	prevLineEnd := newlinePos
 
-	target := prevLineStart + col
-	if target > prevLineEnd {
-		target = prevLineEnd
+	m.cursorPos = prev.startPos + (targetCol - prev.prefixLen)
+	if m.cursorPos > prev.endPos {
+		m.cursorPos = prev.endPos
 	}
-	m.cursorPos = target
 }
 
 func (m *model) moveCursorLineDown() {
-	nextNewlinePos := -1
-	for i := m.cursorPos; i < len(m.inputRunes); i++ {
-		if m.inputRunes[i] == '\n' {
-			nextNewlinePos = i
-			break
-		}
-	}
-	if nextNewlinePos == -1 {
+	v := m.buildInputView()
+	if v.cursorLine < 0 || v.cursorLine >= len(v.lines)-1 {
 		return
 	}
-	curLineStart := 0
-	for i := m.cursorPos - 1; i >= 0; i-- {
-		if m.inputRunes[i] == '\n' {
-			curLineStart = i + 1
-			break
-		}
-	}
-	col := m.cursorPos - curLineStart
+	cur := v.meta[v.cursorLine]
+	next := v.meta[v.cursorLine+1]
 
-	nextLineStart := nextNewlinePos + 1
-	nextLineEnd := len(m.inputRunes)
-	for i := nextLineStart; i < len(m.inputRunes); i++ {
-		if m.inputRunes[i] == '\n' {
-			nextLineEnd = i
-			break
-		}
+	curCol := m.cursorPos - cur.startPos + cur.prefixLen
+	maxCol := next.prefixLen + (next.endPos - next.startPos)
+	targetCol := curCol
+	if targetCol > maxCol {
+		targetCol = maxCol
 	}
 
-	target := nextLineStart + col
-	if target > nextLineEnd {
-		target = nextLineEnd
+	m.cursorPos = next.startPos + (targetCol - next.prefixLen)
+	if m.cursorPos > next.endPos {
+		m.cursorPos = next.endPos
 	}
-	m.cursorPos = target
+}
+
+type inputLine struct {
+	text      string
+	prefixLen int
+	startPos  int // inclusive in inputRunes
+	endPos    int // exclusive in inputRunes
 }
 
 type inputView struct {
 	lines      []string
 	cursorLine int
 	cursorCol  int
+	meta       []inputLine
 }
 
 func (m *model) buildInputView() inputView {
 	prompt := "> "
-	avail := m.width - len(prompt)
+	indent := strings.Repeat(" ", len(prompt))
+	avail := m.width - len(prompt) - 1
 	if avail < 1 {
 		avail = 1
 	}
@@ -273,11 +310,6 @@ func (m *model) buildInputView() inputView {
 
 	runeOffset := 0
 	for li, line := range logicalLines {
-		prefix := strings.Repeat(" ", len(prompt))
-		if li == 0 {
-			prefix = prompt
-		}
-
 		var wrappedLines []string
 		if len(line) == 0 {
 			wrappedLines = []string{""}
@@ -286,18 +318,25 @@ func (m *model) buildInputView() inputView {
 			wrappedLines = strings.Split(w, "\n")
 		}
 
-		for _, wl := range wrappedLines {
-			wlRunes := []rune(wl)
-			lineStart := runeOffset
-			lineEnd := runeOffset + len(wlRunes)
-
-			if cursorPos >= lineStart && cursorPos <= lineEnd {
-				v.cursorLine = len(v.lines)
-				v.cursorCol = len([]rune(prefix)) + (cursorPos - lineStart)
+		for wi, wl := range wrappedLines {
+			prefix := indent
+			if li == 0 && wi == 0 {
+				prefix = prompt
 			}
 
+			wlRunes := []rune(wl)
+			startPos := runeOffset
+			endPos := runeOffset + len(wlRunes)
+			prefixLen := len([]rune(prefix))
+
 			v.lines = append(v.lines, prefix+wl)
-			runeOffset = lineEnd
+			v.meta = append(v.meta, inputLine{
+				text:      prefix + wl,
+				prefixLen: prefixLen,
+				startPos:  startPos,
+				endPos:    endPos,
+			})
+			runeOffset = endPos
 		}
 
 		if li < len(logicalLines)-1 {
@@ -307,9 +346,39 @@ func (m *model) buildInputView() inputView {
 
 	if len(v.lines) == 0 {
 		v.lines = []string{prompt}
+		v.meta = append(v.meta, inputLine{text: prompt, prefixLen: len(prompt), startPos: 0, endPos: 0})
 		v.cursorLine = 0
 		v.cursorCol = len(prompt)
-	} else if cursorPos >= runeOffset {
+		return v
+	}
+
+	// Resolve cursor position.  Scan in reverse so that when cursorPos sits
+	// exactly on a segment boundary (cursorPos == endPos == next.startPos) we
+	// prefer the segment that ENDS there rather than the one that starts there.
+	for i := len(v.meta) - 1; i >= 0; i-- {
+		seg := v.meta[i]
+		if cursorPos >= seg.startPos && cursorPos <= seg.endPos {
+			// For non-last segments, treat the boundary (cursorPos == endPos)
+			// as belonging to this segment.
+			if cursorPos == seg.endPos && i < len(v.meta)-1 {
+				// Still prefer this segment unless it is empty and the next is non-empty
+				next := v.meta[i+1]
+				if seg.endPos > seg.startPos || next.endPos == next.startPos {
+					v.cursorLine = i
+					v.cursorCol = len([]rune(seg.text))
+					break
+				}
+				// Empty segment followed by non-empty: fall through to next segment
+				continue
+			}
+			v.cursorLine = i
+			v.cursorCol = seg.prefixLen + (cursorPos - seg.startPos)
+			break
+		}
+	}
+
+	// Very end of input (past the last segment)
+	if v.cursorLine < 0 && cursorPos >= runeOffset {
 		v.cursorLine = len(v.lines) - 1
 		v.cursorCol = len([]rune(v.lines[len(v.lines)-1]))
 	}
@@ -328,9 +397,7 @@ func (m *model) renderInputWithCursor(v inputView) []string {
 	line := []rune(lines[v.cursorLine])
 	col := v.cursorCol
 
-	if m.cursorPos >= len(m.inputRunes) {
-		lines[v.cursorLine] = string(line) + reverseOn + " " + reverseOff
-	} else if col < len(line) {
+	if col < len(line) {
 		before := string(line[:col])
 		at := string(line[col])
 		after := ""
@@ -339,19 +406,22 @@ func (m *model) renderInputWithCursor(v inputView) []string {
 		}
 		lines[v.cursorLine] = before + reverseOn + at + reverseOff + after
 	} else {
-		lines[v.cursorLine] = string(line) + reverseOn + " " + reverseOff
+		// Cursor at end of line.  If adding a space would overflow the terminal
+		// width, reverse the last character instead so we never write m.width
+		// characters on one row.
+		if len(line) > 0 && len(line) >= m.width {
+			lines[v.cursorLine] = string(line[:len(line)-1]) + reverseOn + string(line[len(line)-1]) + reverseOff
+		} else {
+			lines[v.cursorLine] = string(line) + reverseOn + " " + reverseOff
+		}
 	}
 
 	return lines
 }
 
 func (m *model) hasMultipleInputLines() bool {
-	for _, r := range m.inputRunes {
-		if r == '\n' {
-			return true
-		}
-	}
-	return false
+	v := m.buildInputView()
+	return len(v.lines) > 1
 }
 
 func (m *model) Init() tea.Cmd {
@@ -365,7 +435,22 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
+	case idleTimerMsg:
+		if msg.ID == m.idleTimerID && m.status.State == "done" && time.Since(m.lastInputTime) >= 59*time.Second {
+			m.status.State = "idle"
+		}
+		return m, nil
+
+	case thinkingTickMsg:
+		if msg.ID == m.thinkingID {
+			m.thinkingFrame++
+			return m, startThinking(m.thinkingID)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -378,10 +463,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.MouseButtonWheelDown:
 			m.scrollDown(1)
 		}
+		cmd = m.touchInput()
 
 	case shiftEnterMsg:
 		m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{'\n'}, m.inputRunes[m.cursorPos:]...)...)
 		m.cursorPos++
+		cmd = m.touchInput()
 
 	case tea.KeyMsg:
 		switch msg.Type {
@@ -401,68 +488,85 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Alt {
 				m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{'\n'}, m.inputRunes[m.cursorPos:]...)...)
 				m.cursorPos++
+				cmd = m.touchInput()
 			} else if len(m.inputRunes) > 0 {
-				m.sendChat(string(m.inputRunes))
+				cmd = m.sendChat(string(m.inputRunes))
 				m.inputRunes = m.inputRunes[:0]
 				m.cursorPos = 0
 			}
 		case tea.KeySpace:
 			m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{' '}, m.inputRunes[m.cursorPos:]...)...)
 			m.cursorPos++
+			cmd = m.touchInput()
 		case tea.KeyTab:
 			m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{'\t'}, m.inputRunes[m.cursorPos:]...)...)
 			m.cursorPos++
+			cmd = m.touchInput()
 		case tea.KeyShiftTab:
 			m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{'\t'}, m.inputRunes[m.cursorPos:]...)...)
 			m.cursorPos++
+			cmd = m.touchInput()
 		case tea.KeyBackspace:
 			if m.cursorPos > 0 {
 				m.inputRunes = append(m.inputRunes[:m.cursorPos-1], m.inputRunes[m.cursorPos:]...)
 				m.cursorPos--
 			}
+			cmd = m.touchInput()
 		case tea.KeyDelete:
 			if m.cursorPos < len(m.inputRunes) {
 				m.inputRunes = append(m.inputRunes[:m.cursorPos], m.inputRunes[m.cursorPos+1:]...)
 			}
+			cmd = m.touchInput()
 		case tea.KeyCtrlU:
 			m.inputRunes = m.inputRunes[m.cursorPos:]
 			m.cursorPos = 0
+			cmd = m.touchInput()
 		case tea.KeyCtrlW:
 			m.cursorPos = m.deleteWordBackward()
 			m.inputRunes = m.inputRunes[m.cursorPos:]
+			cmd = m.touchInput()
 		case tea.KeyLeft:
 			if m.cursorPos > 0 {
 				m.cursorPos--
 			}
+			cmd = m.touchInput()
 		case tea.KeyRight:
 			if m.cursorPos < len(m.inputRunes) {
 				m.cursorPos++
 			}
+			cmd = m.touchInput()
 		case tea.KeyUp:
 			if m.hasMultipleInputLines() {
 				m.moveCursorLineUp()
 			} else {
 				m.scrollUp(1)
 			}
+			cmd = m.touchInput()
 		case tea.KeyDown:
 			if m.hasMultipleInputLines() {
 				m.moveCursorLineDown()
 			} else {
 				m.scrollDown(1)
 			}
+			cmd = m.touchInput()
 		case tea.KeyPgUp:
 			m.scrollUp(m.contentHeight())
+			cmd = m.touchInput()
 		case tea.KeyPgDown:
 			m.scrollDown(m.contentHeight())
+			cmd = m.touchInput()
 		case tea.KeyHome:
 			m.cursorPos = 0
+			cmd = m.touchInput()
 		case tea.KeyEnd:
 			m.cursorPos = len(m.inputRunes)
+			cmd = m.touchInput()
 		case tea.KeyRunes:
 			for _, r := range msg.Runes {
 				m.inputRunes = append(m.inputRunes[:m.cursorPos], append([]rune{r}, m.inputRunes[m.cursorPos:]...)...)
 				m.cursorPos++
 			}
+			cmd = m.touchInput()
 		}
 
 	case protocol.EventMsg:
@@ -475,10 +579,55 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				reply := protocol.Envelope{Type: "terminal", ID: env.ID, Data: termData}
 				m.worker.SendEnv(reply)
 			}
+
+			// Parse structured status from token/status events.
+			var payload map[string]interface{}
+			_ = json.Unmarshal(env.Data, &payload)
+			oldState := m.status.State
+			if s, ok := payload["status"].(string); ok && s != "" {
+				m.status.State = s
+			} else if s, ok := payload["state"].(string); ok && s != "" {
+				if s == "error" {
+					m.status.State = "error"
+				} else if s == "done" {
+					m.status.State = "done"
+					m.status.Turns++
+					m.idleTimerID++
+					cmd = startIdleTimer(m.idleTimerID)
+				}
+			}
+			// Start/stop thinking animation based on state transitions.
+			if oldState != m.status.State {
+				switch m.status.State {
+				case "running", "tools", "tooling":
+					m.thinkingID++
+					m.thinkingFrame = 0
+					if cmd != nil {
+						cmd = tea.Batch(cmd, startThinking(m.thinkingID))
+					} else {
+						cmd = startThinking(m.thinkingID)
+					}
+				default:
+					m.thinkingID++ // invalidate pending ticks
+				}
+			}
+			if s, ok := payload["token"].(string); ok {
+				m.status.LastToken = s
+			}
+			if s, ok := payload["error"].(string); ok {
+				m.status.Error = s
+			}
+			if n, ok := payload["msg_count"].(float64); ok {
+				m.status.Msgs = int(n)
+			}
+			if n, ok := payload["context_left"].(float64); ok {
+				m.status.ContextLeft = int(n)
+			}
+
 			m.appendContent(fmt.Sprintf("[%s|%s] %s", env.Type, env.ID, string(env.Data)))
 		}
 	}
-	return m, nil
+	return m, cmd
 }
 
 func (m *model) View() string {
@@ -498,34 +647,35 @@ func (m *model) View() string {
 		inputH = 1
 	}
 
-	contentH := m.height - inputH - 1 // splitter
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	total := len(m.wrapped)
-	start := total - contentH - m.scroll
-	if start < 0 {
-		start = 0
-	}
-	end := start + contentH
-	if end > total {
-		end = total
-	}
-
-	for i := 0; i < contentH; i++ {
-		idx := start + i
-		if idx >= 0 && idx < total {
-			b.WriteString(m.wrapped[idx])
+		contentH := m.height - inputH - 2 // blank line + statusline
+		if contentH < 1 {
+			contentH = 1
 		}
-		if i < contentH-1 {
-			b.WriteByte('\n')
-		}
-	}
 
-	// Splitter
-	b.WriteByte('\n')
-	b.WriteString(strings.Repeat("─", m.width))
+		total := len(m.wrapped)
+		start := total - contentH - m.scroll
+		if start < 0 {
+			start = 0
+		}
+		end := start + contentH
+		if end > total {
+			end = total
+		}
+
+		for i := 0; i < contentH; i++ {
+			idx := start + i
+			if idx >= 0 && idx < total {
+				b.WriteString(m.wrapped[idx])
+			}
+			if i < contentH-1 {
+				b.WriteByte('\n')
+			}
+		}
+
+		// Blank separator + statusline
+		b.WriteByte('\n')
+		b.WriteByte('\n')
+		b.WriteString(renderStatusline(m))
 
 	// Input area
 	b.WriteByte('\n')
@@ -540,52 +690,35 @@ func (m *model) View() string {
 }
 
 func kittyFilter(m tea.Model, msg tea.Msg) tea.Msg {
-	// Method 1: reflection on bubbletea's unexported unknownCSISequenceMsg type.
 	v := reflect.ValueOf(msg)
 	if v.Kind() == reflect.Slice {
 		t := v.Type()
 		if t.PkgPath() == "github.com/charmbracelet/bubbletea" && t.Name() == "unknownCSISequenceMsg" {
-			return parseKittySequence(v.Bytes())
-		}
-	}
-
-	// Method 2: fallback via fmt.Stringer for safety.
-	if s, ok := msg.(fmt.Stringer); ok {
-		str := s.String()
-		if strings.HasPrefix(str, "?CSI[") && strings.HasSuffix(str, "?") {
-			inner := str[5 : len(str)-2]
-			if len(inner) > 0 && inner[0] == '[' {
-				inner = inner[1:]
-			}
-			parts := strings.Fields(inner)
-			if len(parts) > 0 {
-				seq := make([]byte, len(parts))
-				for i, p := range parts {
-					b, _ := strconv.Atoi(p)
-					seq[i] = byte(b)
-				}
-				return parseKittySequence(append([]byte{0x1b, '['}, append(seq, 'u')...))
+			if kmsg, ok := parseKittySequence(v.Bytes()); ok {
+				return kmsg
 			}
 		}
 	}
-
 	return msg
 }
 
-func parseKittySequence(seq []byte) tea.Msg {
+// parseKittySequence interprets CSI `u` sequences from the kitty keyboard protocol.
+// It returns (tea.Msg, true) when it recognizes a key, otherwise (_, false) so the
+// caller falls back to the original unhandled message.
+func parseKittySequence(seq []byte) (tea.Msg, bool) {
 	if len(seq) < 4 || !bytes.HasPrefix(seq, []byte{0x1b, '['}) || seq[len(seq)-1] != 'u' {
-		return nil
+		return nil, false
 	}
 
 	inner := string(seq[2 : len(seq)-1])
 	fields := strings.Split(inner, ";")
 	if len(fields) == 0 {
-		return nil
+		return nil, false
 	}
 
 	code, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	mod := 1
@@ -600,62 +733,140 @@ func parseKittySequence(seq []byte) tea.Msg {
 
 	// Swallow repeats and releases; only act on key-press.
 	if event != 1 && event != 0 {
-		return nil
+		return nil, true
 	}
 
 	alt := mod == 3 || mod == 4 || mod == 7 || mod == 8
 	shift := mod == 2 || mod == 4 || mod == 6 || mod == 8
 	ctrl := mod == 5 || mod == 6 || mod == 7 || mod == 8
 
+	// Ctrl+C, Ctrl+A-Z, etc. Kitty sends the base Unicode codepoint with ctrl modifier.
+	if ctrl && !alt && code >= 97 && code <= 122 {
+		switch code {
+		case 97:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlA}), true
+		case 98:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlB}), true
+		case 99:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlC}), true
+		case 100:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlD}), true
+		case 101:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlE}), true
+		case 102:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlF}), true
+		case 103:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlG}), true
+		case 104:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlH}), true
+		case 105:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlI}), true
+		case 106:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlJ}), true
+		case 107:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlK}), true
+		case 108:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlL}), true
+		case 109:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlM}), true
+		case 110:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlN}), true
+		case 111:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlO}), true
+		case 112:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlP}), true
+		case 113:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlQ}), true
+		case 114:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlR}), true
+		case 115:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlS}), true
+		case 116:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlT}), true
+		case 117:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlU}), true
+		case 118:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlV}), true
+		case 119:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlW}), true
+		case 120:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlX}), true
+		case 121:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlY}), true
+		case 122:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlZ}), true
+		}
+	}
+
+	// Ctrl+special symbols
+	if ctrl && !alt {
+		switch code {
+		case 64:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlAt}), true
+		case 91:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlOpenBracket}), true
+		case 92:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlBackslash}), true
+		case 93:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlCloseBracket}), true
+		case 94:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlCaret}), true
+		case 95:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlUnderscore}), true
+		case 63:
+			return tea.KeyMsg(tea.Key{Type: tea.KeyCtrlQuestionMark}), true
+		}
+	}
+
 	switch code {
 	case 13: // Enter
 		if shift && !ctrl {
-			return shiftEnterMsg{}
+			return shiftEnterMsg{}, true
 		}
-		return tea.KeyMsg(tea.Key{Type: tea.KeyEnter, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyEnter, Alt: alt}), true
 	case 9: // Tab
 		if shift {
-			return tea.KeyMsg(tea.Key{Type: tea.KeyShiftTab, Alt: alt})
+			return tea.KeyMsg(tea.Key{Type: tea.KeyShiftTab, Alt: alt}), true
 		}
-		return tea.KeyMsg(tea.Key{Type: tea.KeyTab, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyTab, Alt: alt}), true
 	case 127: // Backspace
-		return tea.KeyMsg(tea.Key{Type: tea.KeyBackspace, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyBackspace, Alt: alt}), true
 	case 27: // Escape
-		return tea.KeyMsg(tea.Key{Type: tea.KeyEscape, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyEscape, Alt: alt}), true
 	case 32: // Space
-		return tea.KeyMsg(tea.Key{Type: tea.KeySpace, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeySpace, Alt: alt}), true
 	}
 
 	// Kitty extended key codes.
 	switch code {
 	case 57350:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyUp, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyUp, Alt: alt}), true
 	case 57351:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyDown, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyDown, Alt: alt}), true
 	case 57352:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyRight, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyRight, Alt: alt}), true
 	case 57353:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyLeft, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyLeft, Alt: alt}), true
 	case 57354:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyHome, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyHome, Alt: alt}), true
 	case 57355:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyEnd, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyEnd, Alt: alt}), true
 	case 57356:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyPgUp, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyPgUp, Alt: alt}), true
 	case 57357:
-		return tea.KeyMsg(tea.Key{Type: tea.KeyPgDown, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyPgDown, Alt: alt}), true
 	}
 
-	// Printable ASCII.
+	// Printable ASCII (unmodified or shift-only).
 	if code >= 32 && code <= 126 {
 		r := rune(code)
 		if shift && code >= 97 && code <= 122 {
 			r = rune(code - 32)
 		}
-		return tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}, Alt: alt})
+		return tea.KeyMsg(tea.Key{Type: tea.KeyRunes, Runes: []rune{r}, Alt: alt}), true
 	}
 
-	return nil
+	return nil, false
 }
 
 func main() {
@@ -681,6 +892,15 @@ func main() {
 		os.Exit(1)
 	}
 	m.worker = w
+	defer w.Kill()
+
+	go func() {
+		c := make(chan os.Signal, 1)
+		signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		<-c
+		w.Kill()
+		os.Exit(1)
+	}()
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

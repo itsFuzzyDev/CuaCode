@@ -44,14 +44,17 @@ def _result_gemini(call: ToolCall, result: dict) -> dict:
 def _result_ollama(call: ToolCall, result: dict) -> list[dict]:
     data = result.get("result", {})
     img = data.get("image_base64")
-    if img:
-        meta = {k: v for k, v in data.items() if k != "image_base64"}
+    images = data.get("images", [])
+    if img and not images:
+        images = [img]
+    if images:
+        meta = {k: v for k, v in data.items() if k not in ("image_base64", "images")}
         return [
             {"role": "tool", "content": json.dumps({
-                "note": "image is attached as the next user message, not included here",
+                "note": "images are attached as the next user message, not included here",
                 **meta
             })},
-            {"role": "user", "content": "here is the screenshot you requested", "images": [img]},
+            {"role": "user", "content": f"here are the {len(images)} photo(s) you requested", "images": images},
         ]
     return [{"role": "tool", "content": json.dumps(result)}]
 

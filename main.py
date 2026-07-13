@@ -25,13 +25,22 @@ while True:
             ipc.messages.append({"role": "user", "content": text})
             ipc.reply(env, "status", {"type": "chat_received"})
             try:
-                for chunk in generate(messages=ipc.messages, ctx=ctx):
+                for chunk in generate(API_KEY=None, messages=ipc.messages, ctx=ctx):
                     typ = chunk.get("type")
                     if typ == "done":
                         ipc.messages = chunk.get("messages", ipc.messages)
-                        ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done"})
+                        ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done", "msg_count": len(ipc.messages)})
                     elif typ == "tool_calls":
-                        ipc.reply(env, "token", {"state": "tool_calls", "token": chunk.get("text"), "status": "running"})
+                        ipc.reply(env, "token", {"state": "tool_calls", "token": chunk.get("text"), "status": "tooling"})
+                    elif typ == "tool_output":
+                        result = chunk.get("result", {})
+                        name = chunk.get("name")
+                        if name in ("screenshot", "photos"):
+                            # Keep IPC payload under ~75 chars — images live in messages, not the wire
+                            count = result.get("count", 1)
+                            ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": {"n": count}, "status": "tooling"})
+                        else:
+                            ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": result, "status": "tooling"})
                     else:
                         ipc.reply(env, "token", {"state": typ, "token": chunk.get("text"), "status": "running"})
             except Exception as e:

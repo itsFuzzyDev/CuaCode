@@ -14,6 +14,7 @@ type EventMsg struct {
 
 type Worker struct {
 	stdin *bufio.Writer
+	cmd   *exec.Cmd
 }
 
 func Spawn(send func(tea.Msg), path string, args ...string) (*Worker, error) {
@@ -38,7 +39,14 @@ func Spawn(send func(tea.Msg), path string, args ...string) (*Worker, error) {
 		_ = scanner.Err()
 	}()
 
-	return &Worker{stdin: bufio.NewWriter(stdinPipe)}, nil
+	return &Worker{stdin: bufio.NewWriter(stdinPipe), cmd: cmd}, nil
+}
+
+func (w *Worker) Kill() error {
+	if w.cmd != nil && w.cmd.Process != nil {
+		return w.cmd.Process.Kill()
+	}
+	return nil
 }
 
 func (w *Worker) SendRaw(line string) error {
