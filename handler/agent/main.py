@@ -38,6 +38,7 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = [{"role": "us
                     ser = [tc.model_dump() if hasattr(tc, 'model_dump') else tc.dict() if hasattr(tc, 'dict') else tc for tc in tcs]
                     yield {"type": "tool_calls", "text": ser}
                     tools.extend(ser)
+            yield {"type": "model", "text": str(chunk)}
             messages.append({"role": "assistant", "thinking": thinking, "content": content, "tool_calls": tools})
             
             if tools:

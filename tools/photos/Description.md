@@ -8,6 +8,7 @@ output:
   count: int
   errors: list[dict]
 active: True
+require_permissions: False
 ---
 Load photos from URLs or local file paths and attach them to the conversation.
 The model can then see and reason about the images directly.

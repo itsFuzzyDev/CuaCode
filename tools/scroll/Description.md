@@ -5,6 +5,7 @@ output:
   dx: int
   dy: int
 active: True
+require_permissions: False
 ---
 Scrolls at the given (x, y) position. dy positive scrolls down,
 negative scrolls up. dx positive scrolls right, negative scrolls left.

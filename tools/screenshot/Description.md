@@ -7,6 +7,7 @@ output:
   width: int,
   height: int
 active: True
+require_permissions: False
 ---
 Takes a screenshot with a labeled pixel-coordinate grid overlaid.
 Grid lines are labeled with their (x,y) logical pixel position — use

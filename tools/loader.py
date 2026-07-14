@@ -11,6 +11,7 @@ class Tool:
     output_schema: dict
     active: bool
     handler: Callable
+    require_permissions: bool
 
 def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if not text.startswith("---"): return {}, text.strip()
@@ -39,6 +40,7 @@ def load_tools(tools_dir="tools") -> dict[str, Tool]:
             input_schema=json.loads(schema_f.read_text()),
             output_schema=meta.get("output", {}),
             active=meta.get("active", True),
+            require_permissions=meta.get("require_permissions", False),
             handler=mod.run,
         )
     return registry

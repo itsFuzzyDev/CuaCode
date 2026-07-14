@@ -5,6 +5,7 @@ output:
   button: str
   clicks: int
 active: True
+require_permissions: False
 ---
 Clicks at the given (x, y) screen coordinate. Coordinates should match
 the logical pixel grid shown in the most recent screenshot. Set

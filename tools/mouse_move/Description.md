@@ -6,6 +6,7 @@ input:
 output:
   moved_to: [int, int]
 active: True
+require_permissions: False
 ---
 Moves the mouse cursor to the given (x, y) screen coordinate.
 Coordinates should match the logical pixel grid shown in the most

@@ -23,7 +23,7 @@ import (
 
 const (
 	reverseOn  = "\x1b[7m"
-	reverseOff = "\x1b[0m"
+	reverseOff = "\x1b[27m"
 )
 
 type shiftEnterMsg struct{}
@@ -664,8 +664,15 @@ func (m *model) View() string {
 
 		for i := 0; i < contentH; i++ {
 			idx := start + i
+			b.WriteString(Bg)
 			if idx >= 0 && idx < total {
 				b.WriteString(m.wrapped[idx])
+				pad := m.width - visualWidth(m.wrapped[idx])
+				if pad > 0 {
+					b.WriteString(strings.Repeat(" ", pad))
+				}
+			} else {
+				b.WriteString(strings.Repeat(" ", m.width))
 			}
 			if i < contentH-1 {
 				b.WriteByte('\n')
@@ -675,17 +682,28 @@ func (m *model) View() string {
 		// Blank separator + statusline
 		b.WriteByte('\n')
 		b.WriteByte('\n')
+		b.WriteString(Bg)
 		b.WriteString(renderStatusline(m))
+		pad := m.width - visualWidth(renderStatusline(m))
+		if pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
 
 	// Input area
 	b.WriteByte('\n')
 	for i, line := range inputLines {
+		b.WriteString(Bg)
 		b.WriteString(line)
+		pad := m.width - visualWidth(line)
+		if pad > 0 {
+			b.WriteString(strings.Repeat(" ", pad))
+		}
 		if i < len(inputLines)-1 {
 			b.WriteByte('\n')
 		}
 	}
 
+	b.WriteString(Reset)
 	return b.String()
 }
 

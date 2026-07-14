@@ -8,6 +8,7 @@ output:
   snapped: bool
   self_snapped: bool
 active: True
+require_permissions: False
 ---
 Opens an application by name (or path on macOS), waits up to 5s for
 its window to appear, then arranges the screen: your own

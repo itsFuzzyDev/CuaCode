@@ -10,17 +10,19 @@ import (
 // you want color.  Always pair with Reset (or another color) so the style
 // doesn't bleed into adjacent fields.
 const (
-	Reset   = "\x1b[0m"
-	Bold    = "\x1b[1m"
-	Dim     = "\x1b[2m"
-	Red     = "\x1b[31m"
-	Green   = "\x1b[32m"
-	Yellow  = "\x1b[93m"
-	Blue    = "\x1b[34m"
-	Magenta = "\x1b[35m"
-	Cyan    = "\x1b[36m"
-	Gray    = "\x1b[90m"
-	White   = "\x1b[97m"
+	Reset      = "\x1b[0m"
+	StyleReset = "\x1b[22;23;24;25;27;28;29;39m"
+	Bg         = "\x1b[48;2;30;30;46m"
+	Bold       = "\x1b[1m"
+	Dim        = "\x1b[2m"
+	Red        = "\x1b[31m"
+	Green      = "\x1b[32m"
+	Yellow     = "\x1b[93m"
+	Blue       = "\x1b[34m"
+	Magenta    = "\x1b[35m"
+	Cyan       = "\x1b[36m"
+	Gray       = "\x1b[90m"
+	White      = "\x1b[97m"
 )
 
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -101,7 +103,7 @@ func renderStatusline(m *model) string {
 		}
 	}
 
-	left := fmt.Sprintf("%s%s%s  %s%d msgs", stateColor, state, Reset, anim, m.status.Msgs)
+	left := fmt.Sprintf("%s%s%s  %s%d msgs", stateColor, state, StyleReset, anim, m.status.Msgs)
 	if m.status.Turns > 0 {
 		left += fmt.Sprintf("  %d turns", m.status.Turns)
 	}
