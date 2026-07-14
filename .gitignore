@@ -2,3 +2,4 @@
 venv
 .DS_Store
 /tools/tasks/tasks.db
+/tui/tui

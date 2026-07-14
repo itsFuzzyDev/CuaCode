@@ -1,71 +1,48 @@
-# test.py
-import ollama, time
-from ui import console, print_thinking, print_thinking_start, print_thinking_end, print_tool_calls, prompt_user
-from tools.loader import load_tools, dispatch
-from tools._parser.ToProvider import to_provider, format_tool_result; from tools._parser.FromProvider import parse_tool_calls
+import sys, os, time, random
+sys.path.insert(0, os.path.dirname(__file__))
+from handler.protocol import IPC, Envelope
+from handler.agent.main import generate
+from tools._parser.FromProvider import parse_tool_calls
 
-def _capture_self_identity():
-    import subprocess, platform
-    system = platform.system()
-
-    if system == "Darwin":
-        r = subprocess.run(["osascript", "-e",
-            'tell application "System Events" to get name of first process whose frontmost is true'],
-            capture_output=True, text=True)
-        return r.stdout.strip() or None
-
-    elif system == "Windows":
-        try:
-            import win32gui, win32process, psutil
-            hwnd = win32gui.GetForegroundWindow()
-            _, pid = win32process.GetWindowThreadProcessId(hwnd)
-            return psutil.Process(pid).name().replace(".exe", "")
-        except Exception:
-            return None
-
-    else:  # Linux
-        try:
-            r = subprocess.run(["xdotool", "getactivewindow", "getwindowname"],
-                                capture_output=True, text=True)
-            return r.stdout.strip() or None
-        except Exception:
-            return None
-class Ctx:
-    def __init__(self, self_identity):
-        self.self_identity = self_identity
-
-ctx = Ctx(self_identity=_capture_self_identity())
-
-registry = load_tools()
-messages=[
-    {"role": "system", "content": open('system_prompt.txt', 'r').read()}, 
-    {"role": "assistant", "content": "Ready. I read the instructions. Key rules I'll follow: batch all independent tool calls in one response, ask only when genuinely blocked."}, 
-    {"role": "user", "content": input("> ")}
-]
-settings = {"provider": "ollama", "model": "kimi-k2.6:cloud"}
+ipc = IPC()
+ipc.send("status", {"state": "ready"})
+Ctx = type('Ctx', (dict,), {'self_identity': property(lambda s: s.get("frontmost_app")), 'session_dir': property(lambda s: s.get("session_dir"))})
+ctx = Ctx(ipc.terminal_info)
 
 while True:
-    stream = ollama.chat(model=settings.get("model"), tools=to_provider(registry, settings.get("provider")), messages=messages, stream=True)
-    thinking, content, tools = "", "", []
-    mode = None 
-    for chunk in stream:
-        if chunk.message.thinking:
-            if mode != "thinking": print_thinking_start(); mode = "thinking"
-            print_thinking(chunk.message.thinking); thinking += chunk.message.thinking
-        if chunk.message.content:
-            if mode == "thinking": print_thinking_end()
-            mode = "content"; print(chunk.message.content, end="", flush=True); content += chunk.message.content
-        if chunk.message.tool_calls: tools.extend(chunk.message.tool_calls)
-    if mode == "thinking": print_thinking_end()
-    if tools: print_tool_calls(tools)
-    print()
-
-
-    messages.append({"role": "assistant", "thinking": thinking, "content": content, "tool_calls": tools})
-    if not tools: messages.append({"role": "user", "content": input("> ")}); continue
-    
-    calls = parse_tool_calls({"message": {"tool_calls": tools}}, settings.get("provider"))
-    for call in calls:
-        result = dispatch(registry, call.name, call.args, ctx=ctx)
-        messages.extend(format_tool_result(call, result, settings.get("provider")))
-        if call is not calls[-1]: time.sleep(0.15)
+    for env in ipc.poll():
+        if env.type == "terminal":
+            ipc.reply(env, "status", {"terminal": ipc.terminal_info})
+            ipc.terminal_info = env.data
+            ctx = Ctx(ipc.terminal_info)
+            continue
+        if env.type != "cmd": continue
+        if env.data.get("action") == "stop":
+            ipc.reply(env, "status", {"state": "stopped"})
+            sys.exit(0)
+        elif env.data.get("action") == "chat":
+            text = env.data.get("text", "")
+            ipc.messages.append({"role": "user", "content": text})
+            ipc.reply(env, "status", {"type": "chat_received"})
+            try:
+                for chunk in generate(API_KEY=None, messages=ipc.messages, ctx=ctx):
+                    typ = chunk.get("type")
+                    if typ == "done":
+                        ipc.messages = chunk.get("messages", ipc.messages)
+                        ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done", "msg_count": len(ipc.messages)})
+                    elif typ == "tool_calls":
+                        ipc.reply(env, "token", {"state": "tool_calls", "token": chunk.get("text"), "status": "tooling"})
+                    elif typ == "tool_output":
+                        result = chunk.get("result", {})
+                        name = chunk.get("name")
+                        if name in ("screenshot", "photos"):
+                            # Keep IPC payload under ~75 chars — images live in messages, not the wire
+                            count = result.get("count", 1)
+                            ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": {"n": count}, "status": "tooling"})
+                        else:
+                            ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": result, "status": "tooling"})
+                    else:
+                        ipc.reply(env, "token", {"state": typ, "token": chunk.get("text"), "status": "running"})
+            except Exception as e:
+                ipc.reply(env, "token", {"state": "error", "token": str(e), "status": "error"})
+    time.sleep(0.001)
