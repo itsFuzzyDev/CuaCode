@@ -1,0 +1,56 @@
+{
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["read", "write", "edit", "glob", "grep", "mkdir"],
+            "description": "Operation to perform"
+        },
+        "path": {
+            "type": "string",
+            "description": "File path, or base directory for glob/grep/mkdir (supports ~)"
+        },
+        "start": {
+            "type": "integer",
+            "description": "First line to read, 1-based (read only, default 1)"
+        },
+        "end": {
+            "type": "integer",
+            "description": "Last line to read, inclusive (read only, default end of file)"
+        },
+        "content": {
+            "type": "string",
+            "description": "Full file content (required for write, overwrites)"
+        },
+        "edits": {
+            "type": "array",
+            "description": "Replacements applied in order (required for edit)",
+            "items": {
+                "type": "object",
+                "required": ["old", "new"],
+                "properties": {
+                    "old": {
+                        "type": "string",
+                        "description": "Exact text to replace, must be unique in file unless all is true"
+                    },
+                    "new": {
+                        "type": "string",
+                        "description": "Replacement text"
+                    },
+                    "all": {
+                        "type": "boolean",
+                        "description": "Replace every occurrence (default false)"
+                    }
+                }
+            }
+        },
+        "pattern": {
+            "type": "string",
+            "description": "Glob pattern e.g. **/*.py (glob) or regex (grep). Required for glob, grep"
+        },
+        "include": {
+            "type": "string",
+            "description": "Glob filter for which files to grep when path is a directory (default all text files)"
+        }
+    },
+    "required": ["action", "path"]
+}
