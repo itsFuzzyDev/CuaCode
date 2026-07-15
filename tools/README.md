@@ -10,3 +10,4 @@ tools:
 - [x] wait (seconds)
 - [x] app_open (app_name)
 - [x] app_list - includes closed and opened apps.
+- [x] file (action: read/write/append/list/info/move/delete)
