@@ -19,8 +19,8 @@ type CmdData struct {
 }
 
 type TerminalData struct {
-	TERM        string `json:"term"`
-	Program     string `json:"term_program,omitempty"`
-	TTY         string `json:"tty,omitempty"`
+	TERM         string `json:"term"`
+	Program      string `json:"term_program,omitempty"`
+	TTY          string `json:"tty,omitempty"`
 	FrontmostApp string `json:"frontmost_app,omitempty"`
 }

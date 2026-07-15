@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"os/exec"
-
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 type EventMsg struct {
@@ -17,7 +15,7 @@ type Worker struct {
 	cmd   *exec.Cmd
 }
 
-func Spawn(send func(tea.Msg), path string, args ...string) (*Worker, error) {
+func Spawn(send func(any), path string, args ...string) (*Worker, error) {
 	cmd := exec.Command(path, args...)
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
@@ -34,7 +32,10 @@ func Spawn(send func(tea.Msg), path string, args ...string) (*Worker, error) {
 	go func() {
 		scanner := bufio.NewScanner(stdoutPipe)
 		for scanner.Scan() {
-			send(EventMsg{Raw: scanner.Bytes()})
+			// Copy: scanner reuses its buffer, and send delivers async.
+			line := make([]byte, len(scanner.Bytes()))
+			copy(line, scanner.Bytes())
+			send(EventMsg{Raw: line})
 		}
 		_ = scanner.Err()
 	}()
