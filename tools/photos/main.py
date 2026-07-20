@@ -22,7 +22,7 @@ def _to_b64(data: bytes, max_size: int | None = None) -> str:
         if w > max_size or h > max_size:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=50, optimize=True)
+    img.save(buf, format="JPEG", quality=86, optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
 
 def run(args: dict, ctx) -> dict:

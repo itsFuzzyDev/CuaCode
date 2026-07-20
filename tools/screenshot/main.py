@@ -45,14 +45,31 @@ def run(args: dict, ctx) -> dict:
         img = img.resize((logical_w, logical_h), Image.LANCZOS)
     lw, lh = img.size
 
-    img = draw_grid(img, grid_size, plat.FONT_PATH)
+    region = args.get("region")
+    origin, zoom = (0, 0), 1.0
+    if region:
+        from PIL import Image
+        zoom = float(args.get("zoom", 2))
+        cx, cy = int(region[0]), int(region[1])
+        cw, ch = int(lw / zoom), int(lh / zoom)
+        x0 = max(0, min(cx - cw // 2, lw - cw))
+        y0 = max(0, min(cy - ch // 2, lh - ch))
+        img = img.crop((x0, y0, x0 + cw, y0 + ch)).resize((lw, lh), Image.LANCZOS)
+        origin = (x0, y0)
+        grid_size = args.get("grid_size", max(20, int(100 / zoom)))
+
+    img = draw_grid(img, grid_size, plat.FONT_PATH, origin=origin, scale=zoom)
     save_screenshot(img, session_dir, OS, raw=False)
 
     with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f: out = f.name
     try:
-        img.convert("RGB").save(out, "JPEG", quality=50, optimize=True)
+        img.convert("RGB").save(out, "JPEG", quality=86, optimize=True)
         b64 = base64.b64encode(open(out, "rb").read()).decode()
     finally:
         os.unlink(out)
 
-    return {"image_base64": b64, "width": lw, "height": lh, "grid_size": grid_size, "self_snapped": self_snapped}
+    out_meta = {"image_base64": b64, "width": lw, "height": lh, "grid_size": grid_size, "self_snapped": self_snapped}
+    if region:
+        out_meta["zoomed_region"] = {"origin": list(origin), "zoom": zoom,
+                                     "covers": [origin[0], origin[1], origin[0] + int(lw / zoom), origin[1] + int(lh / zoom)]}
+    return out_meta

@@ -2,8 +2,21 @@
   "properties": {
     "grid_size": {
       "type": "integer",
-      "description": "spacing between labeled gridlines in pixels",
+      "description": "spacing between labeled gridlines in screen pixels",
       "default": 100
-    }}, 
+    },
+    "region": {
+      "type": "array",
+      "items": {"type": "integer"},
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "[x, y] logical screen coordinate to zoom into. Crops around this point and magnifies for precise coordinate reading. Grid labels stay in true screen coordinates, so they can be used directly for click/mouse_move."
+    },
+    "zoom": {
+      "type": "number",
+      "description": "magnification factor when region is set",
+      "default": 2
+    }
+  },
   "required": []
 }
