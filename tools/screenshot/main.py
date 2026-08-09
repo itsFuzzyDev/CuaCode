@@ -34,8 +34,16 @@ def run(args: dict, ctx) -> dict:
     # driven -- but without raising it. This runs on every capture, and it is
     # the last window action before the shot, so raising here would leave the
     # terminal focused and send the agent's next click/keystroke to itself.
-    snap = _snap_module()
-    self_snapped = snap.snap_region(self_name, 0.0, 0.3, focus=False) if self_name else False
+    #
+    # Parking is cosmetic; the capture is the tool. A window-manager call that
+    # fails must not cost the agent its only view of the screen, so nothing
+    # here is allowed to propagate.
+    self_snapped = False
+    if self_name:
+        try:
+            self_snapped = _snap_module().snap_region(self_name, 0.0, 0.3, focus=False)
+        except Exception:
+            self_snapped = False
 
     plat = _capture_module()
     img = plat.capture()
