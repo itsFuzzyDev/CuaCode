@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 
 	"cuacode/core/session"
@@ -21,6 +22,49 @@ import (
 // WorkerEnv overrides worker script discovery when set.
 const WorkerEnv = "CUACODE_WORKER"
 
+// usable reports whether a candidate path is an interpreter worth trying.
+//
+// The size check is for Windows only, and it is the whole reason PATH lookup
+// used to fail there: `python3.exe` under WindowsApps is usually an App
+// Execution Alias -- a zero-byte reparse point that prints "Python was not
+// found" to stderr and exits. It resolves through LookPath like a real binary,
+// so the only thing separating the two is that no real interpreter is empty.
+func usable(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" && st.Size() == 0 {
+		return false
+	}
+	return true
+}
+
+// venvCandidates lists the interpreter paths a virtualenv at dir could hold.
+// Windows puts it in Scripts\python.exe; every other platform in bin/.
+func venvCandidates(dir string) []string {
+	if runtime.GOOS == "windows" {
+		return []string{
+			filepath.Join(dir, "Scripts", "python.exe"),
+			filepath.Join(dir, "Scripts", "python3.exe"),
+		}
+	}
+	return []string{
+		filepath.Join(dir, "bin", "python3"),
+		filepath.Join(dir, "bin", "python"),
+	}
+}
+
+// pathNames is the order to try bare interpreter names in. python3 first
+// everywhere except Windows, where that name is usually the Store stub and
+// `python` is the real install.
+func pathNames() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"python", "python3"}
+	}
+	return []string{"python3", "python"}
+}
+
 // Python returns the interpreter to run the worker with. CUACODE_PYTHON wins,
 // then a venv next to the worker script, then python3/python on PATH.
 func Python(workerPath string) (string, error) {
@@ -28,13 +72,18 @@ func Python(workerPath string) (string, error) {
 		return p, nil
 	}
 	if workerPath != "" {
-		venv := filepath.Join(filepath.Dir(workerPath), "venv", "bin", "python3")
-		if st, err := os.Stat(venv); err == nil && !st.IsDir() {
-			return venv, nil
+		root := filepath.Dir(workerPath)
+		for _, name := range []string{"venv", ".venv"} {
+			for _, cand := range venvCandidates(filepath.Join(root, name)) {
+				if usable(cand) {
+					return cand, nil
+				}
+			}
 		}
 	}
-	for _, name := range []string{"python3", "python"} {
-		if p, err := exec.LookPath(name); err == nil {
+	for _, name := range pathNames() {
+		p, err := exec.LookPath(name)
+		if err == nil && usable(p) {
 			return p, nil
 		}
 	}
