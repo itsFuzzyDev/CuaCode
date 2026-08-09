@@ -5,34 +5,138 @@ CLI agent for computer use and more.
 > This is still a work in progress, use at your own risk (not a virus, just not my problem if you mess up your computer lol).
 
 ## Requirements
-Have [Go](<https://go.dev/>) installed  
-Have [Python](<https://www.python.org/>) installed
 
-### Install
-Run the following commands
+- [Python](https://www.python.org/) 3.10 or newer
+- [Go](https://go.dev/) — only to build or run a frontend
+
+## Install
+
+One script does the whole thing: finds an interpreter, makes a venv, installs
+the dependencies, builds every frontend.
+
 ```bash
-# Create a virtual enviroment:
-python3 -m venv venv
-
-# If you're on linux/mac
-source ./venv/bin/activate
-# If you're on windows run a script similar to this, ask your ai to help you if somehow it errors or something lol
-\venv\Scripts\Activate
-
-# Install all the requirements (make sure your enviroment is acutally activated)
-pip install -r requirements.txt
-
-# Build every frontend **THIS WILL REQUIRE GO**
-./build.sh
+# macOS / Linux
+./install.sh
 ```
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Flags: `--no-build` / `-NoBuild` for the Python side only, `--no-venv` /
+`-NoVenv` to install into the interpreter as found. Re-running is safe — an
+existing `venv/` is reused.
 
 Then run one:
 
 ```bash
-./bin/classic     # built binary
-./run.sh classic  # or straight from source, no build step
+./bin/deck        # built binary
+./run.sh deck     # or straight from source, no build step
 ./run.sh          # list the frontends you have
 ```
+
+```powershell
+.\bin\deck.exe
+.\run.ps1 deck
+.\run.ps1
+```
+
+Building on its own is `./build.sh` (`.\build.ps1`), optionally with one
+frontend's name, or `--keep-going` / `-KeepGoing` to report failures at the end
+rather than stopping at the first — `gio` needs a C toolchain and platform
+headers, and the terminal frontends do not.
+
+### Doing it by hand
+
+```bash
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt      # windows: venv\Scripts\pip
+./build.sh
+```
+
+The interpreter is found at spawn time by layout, not by activation: there is
+no need to `activate` anything to run the app. A `venv/` or `.venv/` next to
+`main.py` wins over PATH, and `CUACODE_PYTHON` wins over both.
+
+### Platform notes
+
+- **macOS** — `pyobjc-framework-Quartz`, installed for you. Computer use needs
+  Accessibility and Screen Recording permission for your terminal (System
+  Settings → Privacy & Security), or clicks land nowhere and screenshots come
+  back black.
+- **Linux** — needs `xdotool` on PATH for clicks, keys and window titles
+  (`apt install xdotool` / `pacman -S xdotool`). X11; Wayland is not handled.
+- **Windows** — `pywin32` and `psutil`, installed for you. If a frontend starts
+  but nothing ever happens, see [Worker discovery](#worker-discovery) — a
+  zero-byte `python3.exe` from the Microsoft Store is the usual reason.
+
+## First run
+
+Nothing is configured out of the box. The first launch writes
+`~/.cuacode/config.json` (on Windows, `%USERPROFILE%\.cuacode\config.json`) as a
+fill-in-the-blank template with a blank entry per provider:
+
+```json
+{
+  "active": "ollama",
+  "providers": {
+    "anthropic": {"model": "", "api_key": "", "params": {}},
+    "ollama":    {"model": "", "api_key": "", "params": {}}
+  }
+}
+```
+
+Fill in `model` and `api_key` for the one you want and set `active` to its name,
+or pick both from inside `deck` with `/provider` — the file is written either
+way. It is re-read every turn, so an edit lands on the next message without a
+restart. It holds API keys in plaintext and is chmod 0600 on every write (a
+no-op on Windows, where the file's protection is the profile directory's).
+
+Everything else the agent keeps lives beside it:
+
+```
+~/.cuacode/config.json      providers, keys, models, your permission lists
+~/.cuacode/sessions/        one directory per conversation
+~/.cuacode/subagents/*.md   yours; loaded next to the ones that ship
+~/.cuacode/workflows/*.py
+~/.cuacode/skills/<name>/
+~/.cuacode/mcp/servers.json
+```
+
+`CUACODE_HOME` moves the whole root.
+
+## Providers
+
+| Name | Default endpoint | Key read from |
+| --- | --- | --- |
+| `ollama` | local daemon | `OLLAMA_API_KEY` (only a hosted one needs it) |
+| `anthropic` | api.anthropic.com | `ANTHROPIC_API_KEY` |
+| `openai` | api.openai.com | `OPENAI_API_KEY` |
+| `openrouter` | openrouter.ai | `OPENROUTER_API_KEY` |
+| `groq` | api.groq.com | `GROQ_API_KEY` |
+| `nvidia` | integrate.api.nvidia.com | `NVIDIA_API_KEY` |
+| `deepseek` | api.deepseek.com | `DEEPSEEK_API_KEY` |
+| `together` | api.together.xyz | `TOGETHER_API_KEY` |
+| `lmstudio` | localhost:1234 | `LMSTUDIO_API_KEY` |
+
+The environment variable wins over the key in `config.json`, so a shell can
+override a stored key without editing anything. Anything OpenAI-compatible is
+one entry in `handler/agent/providers.py`.
+
+**Vision is the thing that decides what the agent can do.** A model that cannot
+see is never handed the screenshot tools — offered them it would call them, and
+the endpoint rejects the image with a 400 that costs the whole turn — so on a
+text-only model you get a capable CLI agent and no computer use. Capability is
+asked of the provider where it can be, learned from a refusal where it cannot,
+and remembered per model. A blind model can borrow eyes: set `vision` to another
+configured provider (`/provider` does this too) and `describe_image` routes
+screenshots through it.
+
+Thinking effort is per conversation, not per account: `off`, `low`, `medium`,
+`high`, `max`, set with `/effort` and stored with the session. Each provider's
+own dialect for it — `reasoning_effort`, thinking budgets, `num_ctx` — is
+translated from that one ladder.
 
 ## Layout
 
@@ -41,6 +145,7 @@ frontends talking to it over line-delimited JSON on stdin/stdout.
 
 ```
 main.py, handler/, tools/     the Python worker (the actual agent)
+integrations/                 subagents, workflows, skills, MCP servers
 go/core/protocol/             the wire format: envelopes, events, subprocess IPC
 go/core/session/              frontend-agnostic state: spawns the worker, tracks
                               status/msgs/turns, emits Events
@@ -52,14 +157,23 @@ bin/                          build output, one binary per frontend
 Nothing in `core/` knows a frontend exists, and no frontend knows about
 another. Adding one never touches the others.
 
+### Tools
+
+`WebFetch` `WebSearch` `agent` `app_list` `app_open` `background`
+`click` `describe_image` `file` `key` `mcp` `mouse_move` `photos`
+`screenshot` `scroll` `shell` `skill` `tasks` `type_text` `wait` `workflow`
+
+The pointer-and-keyboard ones (`click`, `key`, `scroll`, `type_text`,
+`screenshot`, `app_open`, `app_list`) have a per-OS implementation behind one
+`main.py`, picked at call time — nothing OS-specific is imported until it runs.
+
 ### Frontends
 
 | Name | What it is |
 | --- | --- |
-| `classic` | Terminal. Full-width scrollback of the streamed worker output, statusline, multi-line input bar pinned to the bottom. Ctrl+C quits, Alt/Shift+Enter for a newline, arrows/PgUp/PgDn/wheel scroll. |
-| `gio` | GUI window. Raw wire log — every envelope in and out, prefix tinted by state — with a status strip and an input bar. Enter sends, **Esc stops the run in flight**. Fonts are bundled (`go/frontends/gio/fonts/`); `CUACODE_FONT=/path/to.ttf` swaps the mono face without a rebuild. |
+| `deck` | Terminal, the one to start with. Built on `sketch`: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+O` opens the call under the cursor in full — every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/help`, `/new`, `/provider`, `/effort`, `/model`, `/vision`, `/permissions`, `/clear`, `/quit`) and `@` a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command — `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there — and it is redrawn by replaying its stored records as ordinary events. Asks before the `file` and `shell` calls that change something — a read or a command that only looks runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact thing — a `file` **read**, or that one `shell` command — never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
+| `gio` | GUI window. Raw wire log — every envelope in and out, prefix tinted by state — with a status strip and an input bar. Enter sends, **Esc stops the run in flight**. Fonts are bundled (`go/frontends/gio/fonts/`); `CUACODE_FONT=/path/to.ttf` swaps the mono face without a rebuild. Needs a C toolchain to build. |
 | `sketch` | Terminal scaffold to design on top of. Plumbing is done (worker, session, input, scroll, spinner, Esc cancel); the look is deliberately bare. `main.go` is the wiring, `view.go` is the whole design surface. |
-| `deck` | Terminal, built on `sketch`: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+O` opens the call under the cursor in full — every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/new`, `/provider`, `/effort`, `/permissions`, `/clear`, `/help`, `/quit`) and `@` a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command — `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there — and it is redrawn by replaying its stored records as ordinary events. Asks before the `file` and `shell` calls that change something — a read or a command that only looks runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact thing — a `file` **read**, or that one `shell` command — never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
 
 ### Adding a frontend
 
@@ -75,6 +189,26 @@ sess.Cancel()            // abandon the run in flight, worker stays up
 sess.Background()        // push the running tool call into the background
 sess.Snapshot()          // current state out
 ```
+
+Each `session.Event` carries the parsed worker envelope plus a `Snapshot`
+(state, msgs, turns, last streamed token, context left). It arrives on the
+worker's reader goroutine, so forward it to your own event loop rather than
+mutating UI state in the callback. A worker that dies arrives the same way, as
+an `error` status carrying its stderr, so a frontend that draws errors already
+draws that one.
+
+`sess.Command(action, fields)` sends any of the worker's other commands
+(`session.list`, `session.new`, `session.load`, `session.delete`,
+`session.effort`, `provider.list`, `provider.use`, `provider.set`,
+`model.list`, `vision.use`, `permission.mode`, `tool.detail`,
+`background.list`, `background.kill`); the reply arrives through the same event
+callback, matched by the envelope ID.
+
+`build.sh` and `run.sh` (and their `.ps1` twins) pick up the new directory
+automatically — no registration anywhere. Copy `frontends/sketch/` as a
+starting point if you want the bubbletea scaffolding.
+
+### Cancelling
 
 `Cancel` lands wherever the run currently is: while the request is opening,
 between streamed chunks, between tool calls, and inside one. A tool call is
@@ -115,15 +249,6 @@ Killing is cooperative, for the same reason cancelling is: a tool that watches
 its token stops, and one that does not runs to the end with its result
 discarded. The reply says which of the two happened rather than claiming
 success either way.
-
-`build.sh` and `run.sh` pick up the new directory automatically — no
-registration anywhere. Copy `frontends/classic/` as a starting point if you
-want the bubbletea scaffolding.
-
-`sess.Command(action, fields)` sends any of the worker's other commands
-(`session.list`, `session.new`, `session.load`, `provider.list`, `provider.use`,
-`permission.mode`, `tool.detail`); the reply arrives through the same event
-callback, matched by the envelope ID.
 
 ### Reading a tool call in full
 
@@ -207,29 +332,47 @@ The lists live in `tools/_safety/`. Personal additions go in
 }
 ```
 
-Each `session.Event` carries the parsed worker envelope plus a `Snapshot`
-(state, msgs, turns, last streamed token, context left). It arrives on the
-worker's reader goroutine, so forward it to your own event loop rather than
-mutating UI state in the callback.
-
 ### Worker discovery
 
 Frontends find `main.py` by walking up from the working directory, then from
-the executable. Override with `CUACODE_WORKER=/path/to/main.py`, and the
-interpreter with `CUACODE_PYTHON` (a `venv/` next to `main.py` is preferred
-over PATH automatically).
+the executable. Override with `CUACODE_WORKER=/path/to/main.py`.
 
-## Providers
+The interpreter is found in this order: `CUACODE_PYTHON`, then a `venv/` or
+`.venv/` next to `main.py` (`bin/python3`, or `Scripts\python.exe` on Windows),
+then PATH. On Windows a zero-byte candidate is skipped, because `python3.exe`
+there is usually the Microsoft Store App Execution Alias — a stub that prints to
+stderr and exits, which used to look exactly like the app hanging. If a frontend
+draws its chrome and nothing else ever happens, run the worker by hand:
 
-Ollama is the only provider that is currently set up.
-> API keys are also supported with Ollama, you can change your api key in the `main.py:28` file, change the `API_KEY=None` to `API_KEY="Your_api_key"`
-## Platform requirements
+```
+venv/bin/python3 main.py          # windows: venv\Scripts\python.exe main.py
+```
 
-- macOS: `pyobjc-framework-Quartz`
-- Linux: `xdotool`
-- Windows: `pywin32`, `psutil`    
+It should print one `{"state": "ready"}` line and then wait on stdin. Anything
+else is the error the frontend was not showing you.
 
-## Adding tools
+## Extending it
 
-Create a folder under `tools/` with `Description.md`, `InputSchema.json`, `main.py` (export `run(args, ctx)`). Auto-loaded.
+Three ways that need no Go and no restart — files are re-read every turn, so
+one written mid-conversation is usable in the next. The ones under
+`integrations/` ship with the app; the ones under `~/.cuacode/` are yours, and a
+name collision goes to yours.
 
+| | Ships in | Yours in | What it is |
+| --- | --- | --- | --- |
+| subagent | `integrations/subagents/*.md` | `~/.cuacode/subagents/` | one model run with its own prompt, tools and output schema |
+| workflow | `integrations/workflows/*.py` | `~/.cuacode/workflows/` | a script running several of them in a fixed order |
+| skill | `integrations/skills/<name>/` | `~/.cuacode/skills/<name>/` | instructions loaded only when needed |
+| MCP server | `integrations/mcp/servers.json` | `~/.cuacode/mcp/servers.json` | tools this codebase did not write |
+
+`integrations/README.md` has the formats. Nothing MCP is registered by default.
+
+### Adding a tool
+
+A folder under `tools/` with three files — `Description.md` (frontmatter plus
+the prose the model reads), `InputSchema.json`, and `main.py` exporting
+`run(args, ctx)`. It is loaded on the next start, with no registration
+anywhere; a folder starting with `_` is a library, not a tool. Optional hooks:
+`describe()`/`schema()` for a tool whose options only exist at runtime,
+`preview()` for one that can show what a call would do, `safe()` to answer for
+a specific call. The `writing-tools` skill walks through it.
