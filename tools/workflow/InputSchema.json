@@ -1,0 +1,7 @@
+{
+    "properties": {
+        "workflow": {"type": "string", "description": "Which stored workflow to run."},
+        "args": {"type": "object", "description": "Input for the workflow, in whatever shape its description asks for."}
+    },
+    "required": ["workflow"]
+}

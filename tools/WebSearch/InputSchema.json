@@ -1,0 +1,16 @@
+{
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "What to search for. Phrase it like a search engine query, not a question to a person."
+        },
+        "max_results": {
+            "type": "integer",
+            "description": "How many results to return, at most. Default 5.",
+            "default": 5,
+            "minimum": 3,
+            "maximum": 35
+        }
+    },
+    "required": ["query"]
+}

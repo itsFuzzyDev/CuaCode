@@ -1,0 +1,15 @@
+{
+  "properties": {
+    "sources": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "List of photo URLs or local file paths to load and attach to the conversation"
+    },
+    "max_size": {
+      "type": "integer",
+      "description": "Max width/height in pixels. Larger images are downscaled. Default: no limit",
+      "default": null
+    }
+  },
+  "required": ["sources"]
+}

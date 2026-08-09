@@ -1,0 +1,14 @@
+{
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["list", "load", "call", "stop"],
+            "description": "list: what is registered. load: start a server and return its tools and their schemas. call: run one of those tools. stop: shut a server down."
+        },
+        "server": {"type": "string", "description": "Which registered MCP server."},
+        "tool": {"type": "string", "description": "For call: the tool name, exactly as load reported it."},
+        "arguments": {"type": "object", "description": "For call: arguments matching that tool's schema."},
+        "session": {"type": "string", "description": "For call: an MCP session id or handle to route this call to. Omit to use the current run's session -- a subagent run gets its own automatically."}
+    },
+    "required": ["action"]
+}

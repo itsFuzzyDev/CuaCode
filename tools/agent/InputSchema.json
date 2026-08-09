@@ -1,0 +1,13 @@
+{
+    "properties": {
+        "agent": {
+            "type": "string",
+            "description": "Which subagent to run."
+        },
+        "prompt": {
+            "type": "string",
+            "description": "The whole job, self-contained. The subagent sees nothing else."
+        }
+    },
+    "required": ["agent", "prompt"]
+}

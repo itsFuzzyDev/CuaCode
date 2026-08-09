@@ -1,0 +1,7 @@
+{
+  "properties": {
+    "text": {"type": "string", "description": "the text to type"},
+    "delay": {"type": "number", "default": 0.0001, "description": "seconds between each character"}
+  },
+  "required": ["text"]
+}

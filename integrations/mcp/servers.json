@@ -1,0 +1,12 @@
+{
+    "_comment": [
+        "MCP servers that ship with CuaCode. Empty on purpose: an MCP server is a local",
+        "process running with the user's privileges, so nothing is started by default.",
+        "Register your own in ~/.cuacode/mcp/servers.json -- same shape, and it wins on a",
+        "name collision. See README.md.",
+        "",
+        "{\"mcpServers\": {\"name\": {\"command\": \"python3\", \"args\": [\"/abs/path/server.py\"],",
+        " \"description\": \"one line, shown to the model\", \"platform\": \"darwin\"}}}"
+    ],
+    "mcpServers": {}
+}

@@ -1,0 +1,6 @@
+{
+    "properties": {
+        "skill": {"type": "string", "description": "Which skill to load."}
+    },
+    "required": ["skill"]
+}

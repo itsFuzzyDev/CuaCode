@@ -1,0 +1,367 @@
+import itertools, os, time
+from tools.loader import load_tools, dispatch, refresh_dynamic
+from tools._parser.ToProvider import to_provider
+from handler.agent import effort, interrupt, providers
+from handler.agent.background import JOBS
+
+_tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'tools')
+_registry = None
+
+def registry():
+    """Loaded once. load_tools re-execs every tool's main.py, which is real
+    work to repeat on every turn.
+
+    Refreshed once per turn all the same, but only the self-describing tools:
+    an agent that writes a subagent, workflow or skill file has to be able to
+    use it in the same conversation, and everything else on disk is fixed for
+    the life of the process. When nothing has changed the strings come back
+    byte-identical, so the provider's prompt cache is untouched.
+    """
+    global _registry
+    if _registry is None: _registry = load_tools(tools_dir=_tools_dir)
+    return refresh_dynamic(_registry)
+
+def _needs_vision(t) -> bool:
+    """Read off the tool's declared output rather than a hardcoded name list,
+    so a new image-returning tool is covered the day it lands."""
+    return any("base64" in str(v) for v in (t.output_schema or {}).values())
+
+def _visible(reg: dict, vision: bool) -> dict:
+    """The toolbox this model can actually use.
+
+    Never hand a camera to a model that cannot see: offered the tool it will
+    call it, and the endpoint rejects the image with a 400 that costs the whole
+    turn. The reverse holds too -- a tool that exists to describe an image to a
+    model with no eyes is noise in front of a model that has them, and an
+    invitation to delegate something it could just look at.
+    """
+    if vision: return {k: t for k, t in reg.items() if not t.blind_only}
+    # Two reasons to withhold, and they are not the same reason. A tool that
+    # returns an image would fail the request outright. A tool that takes a
+    # coordinate would succeed -- at whatever it happened to land on, chosen by
+    # a model that could not look first. The second is the more dangerous of
+    # the two, because nothing reports it as an error.
+    return {k: t for k, t in reg.items() if not _needs_vision(t) and not t.needs_sight}
+
+def _open(p, provider: str, model: str, messages: list, tools: list, system: str, params: dict):
+    """The stream, plus its first Delta, with one retry for a rejected knob.
+
+    Priming matters: stream() is a generator function, so calling it runs none
+    of the body and the request -- along with any 400 it earns -- only happens
+    once something pulls. Pull one Delta here and a bad parameter is catchable
+    rather than exploding halfway down the consuming loop.
+
+    The retry is what makes the effort setting safe to point at a model nobody
+    has mapped: the rejected key is dropped, remembered on disk, and the turn
+    goes through anyway. Only keys this process added are ever stripped, so an
+    unrelated 400 still reaches the caller.
+    """
+    from handler import config           # imported late: config imports providers
+    try:
+        s = p.stream(model, messages, tools, system, params)
+        return s, next(s, None)
+    except Exception as e:
+        # A model refusing images is not a knob to drop and retry -- the image
+        # is already in the history and would be sent again. Record it instead,
+        # so this costs one failed turn ever: the next turn is built with vision
+        # off, which withholds the cameras and offers describe_image in their
+        # place. The turn still fails, with a sentence that says what happened.
+        if config.is_image_rejection(str(e)):
+            config.learn_blind(provider, model)
+            raise RuntimeError(
+                f"{model} cannot accept images. Recorded, so the next turn will offer "
+                f"describe_image instead of the screenshot tools.") from e
+        learned = effort.learn(str(e), params)
+        if learned is None: raise
+        fixed, dropped = learned
+        config.learn_quirk(provider, model, dropped)
+        s = p.stream(model, messages, tools, system, fixed)
+        return s, next(s, None)
+
+def _opened(*a):
+    """_open with its exception carried back as a value instead of raised.
+
+    It has to run on another thread to be interruptible, and a thread cannot
+    raise into its caller. The distinction _open draws between errors -- a
+    dropped knob it retries, an image rejection it records, anything else it
+    lets through -- all happens inside, so what escapes here is already final
+    and only needs putting back where the caller can see it.
+    """
+    try: return "ok", _open(*a)
+    except BaseException as e: return "err", e
+
+def _preview(tool, args: dict, ctx) -> dict | None:
+    """What the call about to be asked about would do, when the tool can say.
+
+    Never allowed to matter: a preview that raises would turn a question into a
+    failed call, and the dialog it feeds is perfectly readable without one. So
+    anything that goes wrong here comes back as nothing to show.
+    """
+    fn = getattr(tool, "preview", None)
+    if not fn: return None
+    try: return fn(args, ctx)
+    except Exception: return None
+
+def _needs_ask(tool, args: dict, ctx) -> bool:
+    """Whether this call has to be put to the user, as opposed to this tool.
+
+    require_permissions is declared per tool, and per tool is too coarse for
+    most of the tools that declare it: `file` reads far more often than it
+    writes, and the overwhelming majority of shell commands only look at the
+    machine. Asking about every one of them teaches the user to approve without
+    reading, which costs more than it protects -- the prompt that matters is
+    the one that arrives rarely enough to still be read.
+
+    So a tool may define safe(args, ctx) and answer for the specific call. It
+    is a narrowing only: a tool without require_permissions is never asked
+    about either way, and safe() can only take away a prompt the tool itself
+    asked for.
+
+    Fails closed in every direction. No hook, an unreadable answer, an
+    exception -- all of them mean ask, because the cost of a needless prompt is
+    a click and the cost of a missed one is whatever the call did.
+    """
+    if not getattr(tool, "require_permissions", False): return False
+    fn = getattr(tool, "safe", None)
+    if not fn: return True
+    try: return not fn(args, ctx)
+    except Exception: return True
+
+def _call_fn(reg: dict, name: str, args: dict, ctx, token: interrupt.Token):
+    """The dispatch, with everything bound now rather than when the thread gets
+    around to it.
+
+    A detached call outlives the loop iteration that started it, so free
+    variables read at run time would be the *next* call's name and arguments.
+    """
+    cctx = interrupt.ctx_with(ctx, token)
+    return lambda: dispatch(reg, name, args, ctx=cctx)
+
+_BG_NOTE = ("running in the background -- this is not the result. Read it with "
+            "background(action=\"output\", job=\"{job}\") once it finishes, or check "
+            "background(action=\"list\") to see whether it has.")
+
+def _bg_result(job) -> dict:
+    b = job.brief()
+    return {"result": {**b, "note": _BG_NOTE.format(job=job.id)}}
+
+def _finished_note() -> str:
+    """One line per job that ended since anyone last looked, or "".
+
+    Injected as a user message so the model finds out at all: it has no reason
+    to poll a registry it cannot see, and a job whose result is never read was
+    never worth backgrounding. The result itself is deliberately not inlined --
+    a finished build dropped into the middle of a round is the interruption
+    backgrounding was meant to avoid.
+    """
+    done = JOBS.newly_finished()
+    if not done: return ""
+    lines = [f"[background] {j.id} ({j.name}) {j.state} after {j.elapsed}s" for j in done]
+    return ("\n".join(lines) + "\n\nThese finished while you were working. Read one with "
+            "background(action=\"output\", job=\"<id>\") when it is relevant to what you are "
+            "doing; ignore it if it is not. This message is from the runtime, not the user.")
+
+def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, settings: dict = None,
+             system="", cancelled=None, ask=None, allow: list = None, extra: dict = None,
+             provider_obj=None, detach=None):
+    """The agent loop. Also the subagent loop -- the last three arguments are
+    the whole difference.
+
+    system is one string or a list of them. A list stays a list all the way to
+    the provider, which decides what a segment is: a separate system message on
+    ollama and openai, a separate system block on anthropic, which has no
+    system role to put a message in.
+
+    allow  names the tools this run may call, or None for everything the model
+           can see. An empty list is a real answer, not a missing one: it means
+           no tools at all, which turns the loop into a single completion.
+    extra  is tools built at call time rather than loaded from disk, merged in
+           after the filter so they cannot be filtered out. A schema-forcing
+           submit_result is one; nothing about it needs to be special-cased,
+           because a Tool assembled in memory is a Tool.
+    provider_obj takes a provider instance instead of the shared singleton.
+           Those singletons carry per-turn state -- Anthropic._thinking is
+           handed from stream() to assistant_message() on the instance -- so
+           two runs sharing one would trade thinking blocks. Nothing runs
+           concurrently yet; the seam is here so that when it does, this is
+           already the place it plugs into.
+    detach is a threading.Event the frontend sets to push the call currently
+           running into the background. An Event rather than a predicate
+           because it is consumed: interrupt.run clears it, so one press moves
+           one call. Subagents pass None -- there is no user watching a nested
+           run to press anything.
+
+    cancelled is read everywhere something is in flight, not only between
+    steps: the request while it is opening, each streamed chunk, between tool
+    calls, and -- through a thread -- during one. A stop that only lands at
+    boundaries is not a stop, because the thing anyone wants to stop is the
+    ninety-second call, and that is precisely the part with no boundaries in
+    it.
+    """
+    from handler import config           # imported late: config imports providers
+    settings = settings or {}
+    # Defaults live here, not in the signature: this list is appended to and
+    # truncated in place, and a mutable default is shared across every call.
+    if messages is None: messages = [{"role": "user", "content": "hey"}]
+    provider = settings.get("provider", "ollama")
+    p = provider_obj or providers.get(provider)
+    model = settings.get("model") or p.default_model
+    p.setup(API_KEY)
+    # One canonical rung in, whatever this model actually understands out. Read
+    # per turn rather than per run so a knob learned to be unsupported mid-run
+    # stays dropped, and so hand-written params keep winning over the table.
+    params = effort.resolve(provider, p.name, model, settings.get("effort", ""),
+                            settings.get("params"), drop=config.quirks(provider, model),
+                            override=settings.get("effort_map"))
+    # Default sighted when a provider does not declare it: an unexpected 400
+    # is obvious, whereas silently withholding the cameras from a capable
+    # model just looks like the agent got stupid.
+    vision = settings.get("vision", getattr(p, "vision", True))
+    reg = _visible(registry(), vision)
+    if allow is not None: reg = {k: t for k, t in reg.items() if k in allow}
+    if extra: reg = {**reg, **extra}
+    tools = to_provider(tools=reg, provider=p.name)
+    stop = cancelled or (lambda: False)
+
+    while True:
+        # Rollback point for this round. A cancel has to rewind to here: an
+        # assistant message whose tool_calls have no matching results is
+        # rejected on the next request. Completed earlier rounds are kept.
+        mark = len(messages)
+        yield {"type": "round"}
+        thinking, content, calls, last = "", "", [], None
+        # Per round, not per run: the prompt count reported on the next request
+        # already includes everything this one added, so keeping the old numbers
+        # around would only ever mean reporting a stale round's.
+        usage = {}
+        # Opening the request is itself a wait -- a reasoning model can sit on
+        # the connection for a minute before the first token, and that minute
+        # used to be unstoppable. Cancelling here abandons the socket to the
+        # daemon thread rather than waiting on a read nobody is reading.
+        state, opened = interrupt.run(lambda: _opened(p, provider, model, messages, tools, system, params),
+                                      stop=stop)
+        if state != "done":
+            del messages[mark:]
+            yield {"type": "cancelled", "messages": messages}
+            return
+        kind, payload = opened
+        if kind == "err": raise payload
+        stream, first = payload
+        # The primed Delta is put back in front. stream itself stays the
+        # generator, so a cancel below still has something to close().
+        for d in itertools.chain([first] if first is not None else [], stream):
+            if stop():
+                stream.close()
+                break
+            last = d.raw
+            # Merged rather than replaced: the two halves of the count arrive on
+            # different frames, and on anthropic they arrive at opposite ends of
+            # the stream.
+            usage.update(providers.usage_of(d.raw))
+            if d.thinking:
+                yield {"type": "thinking", "text": d.thinking}
+                thinking += d.thinking
+            if d.content:
+                yield {"type": "content", "text": d.content}
+                content += d.content
+            if d.tool_calls:
+                # Complete calls by contract: providers whose arguments arrive
+                # as JSON fragments assemble them before emitting a Delta.
+                yield {"type": "tool_calls", "text": d.tool_calls}
+                calls.extend(d.tool_calls)
+        if stop():
+            del messages[mark:]
+            yield {"type": "cancelled", "messages": messages}
+            return
+
+        yield {"type": "model", "text": str(last)}
+        # What the round cost, as soon as it is known rather than at the end of
+        # the run: a tool loop can go on for minutes, and a context readout that
+        # only moves when the agent stops answering is not a gauge.
+        if usage: yield {"type": "usage", "usage": dict(usage), "model": model}
+        messages.append(p.assistant_message(thinking, content, calls))
+        yield {"type": "assistant", "thinking": thinking, "content": content, "tool_calls": calls}
+
+        if not calls:
+            yield {"type": "done", "messages": messages, "usage": dict(usage)}
+            return
+
+        parsed = p.parse_calls(calls)
+        results = []
+        for call in parsed:
+            # Cheap pre-check. The call itself is watched too, from the thread
+            # below, but a cancel that arrived between calls should not pay for
+            # starting one first.
+            if stop():
+                del messages[mark:]
+                yield {"type": "cancelled", "messages": messages}
+                return
+            # Which calls need asking is the tool's own decision, declared as
+            # require_permissions in its Description.md and narrowed per call by
+            # its own safe() -- see _needs_ask. Asked here for the same
+            # reason cancel is checked here: between calls is the last moment
+            # anything can be stopped, because a click that has already fired
+            # cannot be taken back. A refusal is reported like any other failed
+            # call rather than by skipping the yield -- the assistant message
+            # already holds these tool_calls, and a call left without a result
+            # is rejected on the next request.
+            # reg, not registry(): what was offered is what may be dispatched.
+            # A name outside it comes back as an unknown tool rather than being
+            # executed, which is what makes `allow` a restriction and not a
+            # suggestion, and is also how a synthetic tool from `extra` is
+            # reachable at all.
+            tool = reg.get(call.name)
+            # `background` is injected into the schema of any tool declaring
+            # itself backgroundable, so it arrives as an ordinary argument and
+            # has to come back out before the handler -- which knows nothing
+            # about any of this -- is handed the rest. Asked for on a tool that
+            # did not declare it, it is dropped: a model guessing the flag onto
+            # a click should get the click, not a job id.
+            args = dict(call.args or {})
+            wants_bg = bool(args.pop("background", False)) and getattr(tool, "backgroundable", False)
+            token = interrupt.Token()
+            fn = _call_fn(reg, call.name, args, ctx, token)
+            if ask is not None and tool is not None and _needs_ask(tool, args, ctx) \
+                    and not ask(call.name, args, _preview(tool, args, ctx)):
+                result = {"error": "denied by the user"}
+            elif wants_bg:
+                # Never asked, never waited on: the job starts and the round
+                # moves on. Permission is still asked above first, because a
+                # call the user would have refused is no more acceptable for
+                # being out of sight.
+                job = JOBS.start(call.name, args, fn)
+                yield {"type": "background", "job": job.brief()}
+                result = _bg_result(job)
+            else:
+                state, value = interrupt.run(fn, stop=stop, detach=detach, token=token)
+                if state == "done":
+                    result = value
+                elif state == "cancelled":
+                    # No result for this call, and none needed: the whole round
+                    # goes, so the assistant message holding its tool_calls goes
+                    # with it. A half-finished click cannot be taken back, but
+                    # the token was set on the way here, so a tool that watches
+                    # for it stops rather than finishing into nothing.
+                    del messages[mark:]
+                    yield {"type": "cancelled", "messages": messages}
+                    return
+                else:
+                    # Detached. The same thread keeps running under a job id,
+                    # and the model is told what it got instead of the answer.
+                    job = JOBS.adopt(call.name, args, value)
+                    yield {"type": "background", "job": job.brief()}
+                    result = _bg_result(job)
+            yield {"type": "tool_output", "name": call.name, "result": result}
+            results.append((call, result))
+            if call is not parsed[-1]: time.sleep(0.15)
+        # Handed over as a round, not per call: anthropic and gemini require
+        # every result from one round batched into a single message.
+        messages.extend(p.result_messages(results))
+        # After the results, never before them: this lands as a user message,
+        # and the only place one is unambiguously legal for every provider is
+        # straight after a tool-result message. Recorded through the same yield
+        # the loop records everything else with, so a reload replays it.
+        note = _finished_note()
+        if note:
+            messages.append({"role": "user", "content": note})
+            yield {"type": "notice", "text": note}

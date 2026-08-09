@@ -1,0 +1,17 @@
+{
+    "properties": {
+        "command": {
+            "type": "string",
+            "description": "Shell command to run, e.g. \"git status --short\""
+        },
+        "cwd": {
+            "type": "string",
+            "description": "Directory to run in (supports ~). Persists for later calls; defaults to the last directory used"
+        },
+        "timeout": {
+            "type": "number",
+            "description": "Seconds before the command is killed (default 30, max 120)"
+        }
+    },
+    "required": ["command"]
+}

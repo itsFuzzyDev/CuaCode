@@ -1,0 +1,14 @@
+{
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "The one specific thing you need to know from the image.\ne.g \"what does the error dialog say\", \"is the save button enabled\""
+        },
+        "source": {
+            "type": "string",
+            "description": "\"screen\" for the current screen, or a file path or image URL.",
+            "default": "screen"
+        }
+    },
+    "required": ["question"]
+}

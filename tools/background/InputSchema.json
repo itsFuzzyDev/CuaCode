@@ -1,0 +1,23 @@
+{
+    "properties": {
+        "action": {
+            "type": "string",
+            "enum": ["list", "output", "kill", "wait"],
+            "description": "Operation to perform"
+        },
+        "job": {
+            "type": "string",
+            "description": "Job id, e.g. \"bg_3\" (required for output, kill, wait)"
+        },
+        "state": {
+            "type": "string",
+            "enum": ["all", "running", "killing", "done", "error"],
+            "description": "Filter for list (default: all)"
+        },
+        "timeout": {
+            "type": "number",
+            "description": "Seconds to wait before giving up (default 30, max 300). wait only"
+        }
+    },
+    "required": ["action"]
+}

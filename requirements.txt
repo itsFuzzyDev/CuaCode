@@ -1,0 +1,13 @@
+mss
+pillow
+pyyaml
+ollama
+openai
+anthropic
+rich
+httpx
+trafilatura
+pyobjc-framework-Quartz; sys_platform == "darwin"
+pywin32; sys_platform == "win32"
+psutil; sys_platform == "win32"
+ddgs

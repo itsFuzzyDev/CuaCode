@@ -1,0 +1,19 @@
+{
+    "properties": {
+        "url": {
+            "type": "string",
+            "description": "Absolute URL including scheme (https://...). One page per call."
+        },
+        "goal": {
+            "type": "string",
+            "description": "What you're trying to get from this page, in one line.\nSteers the digest and shows in the run log.\ne.g \"the rate limit numbers\", \"how auth tokens are refreshed\""
+        },
+        "mode": {
+            "type": "string",
+            "description": "Mode you're fetching in, full (direct markdown) or digest (subagent summary)",
+            "enum": ["full", "digest"],
+            "default": "digest"
+        }
+    },
+    "required": ["url", "goal"]
+}
