@@ -23,6 +23,9 @@ handler/agent/          providers (ollama/openai/anthropic dialects), effort lad
                         subagent runner, workflow runner, parallel/pipeline
 handler/session/        conversation records, replay, blobs, ~/.cuacode paths
 handler/config.py       providers, keys, models, learned quirks
+handler/context.py      what fills the window (/context), and per-round token rates
+handler/usage.py        per-round cost stamped on records, rolled into meta.json,
+                        totalled by `./run.sh --usage` and /usage
 tools/<name>/           one folder per tool: Description.md, InputSchema.json, main.py
 tools/_parser/          schema translation per provider dialect, arg validation
 integrations/           subagents, workflows, skills, mcp
@@ -47,6 +50,7 @@ subagents/*.md   subagents the agent tool runs
 workflows/*.py   scripts the workflow tool runs
 skills/<name>/   skills, each with a SKILL.md
 mcp/servers.json MCP servers the mcp tool can reach
+memory/          one fact per file, under global/ projects/<slug>/ apps/<name>/
 ```
 
 `CUACODE_HOME` overrides that root. Files under `integrations/` in the repo are
@@ -64,9 +68,49 @@ Tools are auto-loaded from `tools/`. A folder with a `Description.md`,
 `InputSchema.json` and a `main.py` defining `run(args, ctx)` is a tool — no
 registration anywhere. Frontmatter carries `active` and `require_permissions`.
 
+While a round streams, `generate()` also reports the rate it is generating at,
+split into thinking and answering and estimated from characters; the provider's
+own token counts replace the estimate when the round is billed. `/context`
+answers from what the worker already holds — the prompt, the tool schemas, the
+history in memory — so the readout costs no tokens, and it says which of its
+numbers were measured and which estimated.
+
+Each round's cost is stamped onto the assistant record (`u`), rolled into
+`meta.json` on commit, and totalled across every session by `./run.sh --usage`
+(or `/usage` in deck) without opening a transcript. Input is summed as billed —
+the prompt is re-sent every round — with the largest single prompt beside it.
+
 Subagents and workflows both run through the same `generate()`. A subagent is
 that loop with its own system prompt, a narrower tool list and a schema it must
 fill; a workflow is a script that runs several of them.
+
+## Memory, recall and session names
+
+`integrations/memory/`, three files that share a directory and little else.
+
+`loader.py` is the store: one markdown file per fact, frontmatter carrying
+name, description, type, scope, source. Scope decides who ever sees it —
+`global`, `projects/<slug>` keyed off the working directory, `apps/<name>` for
+how one application behaves. The `memory` tool lists what is in scope in its own
+description (rebuilt every turn by `refresh_dynamic`, like `skill` does), so
+bodies are only ever read on request. Writing under an existing name replaces
+that memory; deleting moves it to `memory/.archive/`.
+
+`recall.py` runs on every user message and is lexical only — no model call, no
+network, because it sits between the user pressing enter and the request going
+out. It scores in-scope memories and past sessions (from `meta.json` alone,
+never `messages.jsonl`) on word overlap, same-directory, and recency, and emits
+at most a few *pointers*: a name and one line, never a body. Recorded as its own
+`{"t": "recall"}` record, which `replay` folds into the user turn it was
+attached to — two user messages in a row is a 400 on anthropic.
+
+`naming.py` titles the conversation. A greeting names nothing (the title stays
+empty and frontends show the id); a small model call runs on its own thread at
+turns 1, 3 and 6, stopping once it comes back confident. `title_source` records
+who chose the name — `user > agent > auto > stub` — and nothing weaker may
+overwrite something stronger. The `memory` tool's `rename_session` is the agent's
+door to the same thing. Results land on a queue the main loop drains between
+turns, so meta.json and stdout each keep exactly one writer.
 
 ## MCP
 

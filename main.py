@@ -15,6 +15,7 @@ from handler.agent.background import JOBS
 from handler.session import store
 from handler.session.main import Session
 from handler import config, context, environment, usage
+from integrations.memory import loader as memory, naming, recall
 
 SETTINGS = config.settings()
 
@@ -28,6 +29,10 @@ ctx = Ctx(ipc.terminal_info)
 # so launching the app and closing it leaves no empty session dirs behind.
 sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""))
 messages = sess.messages()
+# Tools run in this process, so the memory tool retitles the object the loop is
+# holding rather than the file underneath it -- a write to meta.json would be
+# undone by the next commit, which persists the whole dict from memory.
+naming.set_live(sess)
 
 # Which tools need asking is declared per tool (require_permissions); this only
 # records whether the frontend on the other end answers when asked. It has to be
@@ -137,6 +142,11 @@ def replay(session, env):
         t = r.get("t")
         if t == "user":
             ipc.reply(env, "token", {"state": "user", "token": r.get("text", ""), "status": "running"})
+        elif t == "recall":
+            # Drawn, not hidden. Something the runtime put in front of the model
+            # on the user's behalf is exactly the kind of thing they are
+            # entitled to see, and a notice is the row that already means that.
+            ipc.reply(env, "token", {"state": "notice", "token": r.get("text", ""), "status": "running"})
         elif t == "assistant":
             if r.get("thinking"):
                 ipc.reply(env, "token", {"state": "thinking", "token": r["thinking"], "status": "running"})
@@ -160,6 +170,14 @@ while True:
         JOBS.kill_all()
         sess.commit()
         sys.exit(0)
+    # Names that finished while the loop was busy. Applied here rather than on
+    # the thread that produced them, so meta.json has one writer and stdout has
+    # one writer -- a naming call that lands mid-stream must not interleave
+    # with it.
+    for finished in naming.drain():
+        if named := naming.apply(finished, sess):
+            ipc.send("status", {"state": "session_title", **named})
+
     for env in ipc.poll():
         if env.type == "terminal":
             ipc.reply(env, "status", {"terminal": ipc.terminal_info})
@@ -322,11 +340,13 @@ while True:
         elif action == "session.new":
             # Carried over rather than reset: starting a fresh chat is not a
             # request to go back to whatever the provider does by default.
+            recall.forget(sess.id)
             # Last round's cost belonged to the conversation that just went.
             LAST_TURN.clear()
             sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
                                   effort_level=sess.effort)
             messages = sess.messages()
+            naming.set_live(sess)
             ipc.reply(env, "status", {"state": "session", "session_id": sess.id,
                                       "effort": sess.effort, "msg_count": len(messages)})
         elif action == "session.load":
@@ -335,7 +355,8 @@ while True:
                 loaded.restore_tool_state()
                 LAST_TURN.clear()
                 sess, messages = loaded, loaded.messages()
-                    # The status goes first so a frontend can clear whatever it was
+                naming.set_live(sess)
+                # The status goes first so a frontend can clear whatever it was
                 # showing before the replayed conversation starts arriving.
                 ipc.reply(env, "status", {"state": "session", "session_id": sess.id,
                                           "effort": sess.effort, "msg_count": len(messages)})
@@ -372,6 +393,25 @@ while True:
             text = env.data.get("text", "")
             messages.append({"role": "user", "content": text})
             sess.add_user(text)
+            # Where the turn is happening, for anything that scores by it. Set
+            # before recall runs and before the tool descriptions are rebuilt,
+            # which is what makes the memory index the *right* project's.
+            sess.set_cwd(ctx.get("cwd") or "")
+            memory.set_cwd(ctx.get("cwd") or "")
+            # Pointers to things already known that look related. Appended to
+            # the user's own message rather than sent as a second one: two user
+            # messages in a row is a 400 on anthropic, and this is a note about
+            # that message anyway. Never allowed to fail a turn -- a recall
+            # block is a convenience, and no convenience gets to eat a message.
+            try:
+                note = recall.block(text, sid=sess.id, path=ctx.get("cwd") or "",
+                                    apps=[ctx.get("frontmost_app") or ""])
+            except Exception:
+                note = ""
+            if note:
+                sess.add_recall(note)
+                messages[-1]["content"] += "\n\n" + note
+                ipc.reply(env, "token", {"state": "notice", "token": note, "status": "running"})
             ipc.reply(env, "status", {"type": "chat_received"})
             # Point ctx at whichever session this turn belongs to. Here rather
             # than beside each `sess =` above, because there are three of those
@@ -448,6 +488,11 @@ while True:
                     elif typ == "done":
                         messages = chunk.get("messages", messages)
                         sess.commit()
+                        # After the commit, so the namer reads a turn count that
+                        # has actually happened. Fires at most three times in a
+                        # session, on its own thread: the answer is already
+                        # streamed and nobody waits on a label.
+                        naming.maybe_start(sess)
                         ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done",
                                                  "msg_count": len(messages),
                                                  **context_fields(chunk.get("usage")), **turn_fields(chunk)})

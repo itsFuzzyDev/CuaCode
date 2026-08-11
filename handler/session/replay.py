@@ -41,6 +41,18 @@ def to_messages(records: list[dict], provider: str, native_ok: bool = True,
         if t == "user":
             flush()
             msgs.append({"role": "user", "content": rec.get("text", "")})
+        elif t == "recall":
+            # Folded into the user turn it was attached to rather than sent as
+            # its own message: anthropic rejects two user messages in a row, and
+            # this is a note about that message, not another one. Only ever
+            # written directly after a user record, so the merge is the live
+            # path exactly -- if it somehow is not, it stands alone rather than
+            # attaching itself to an assistant turn.
+            flush()
+            if msgs and msgs[-1].get("role") == "user" and isinstance(msgs[-1].get("content"), str):
+                msgs[-1]["content"] += "\n\n" + rec.get("text", "")
+            else:
+                msgs.append({"role": "user", "content": rec.get("text", "")})
         elif t == "assistant":
             flush()
             wrote_it = (rec.get("p") or origin) == provider

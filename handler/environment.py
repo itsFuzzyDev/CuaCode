@@ -105,6 +105,8 @@ def block(ctx=None, settings: dict = None, session=None) -> str:
         "  subagents/*.md   subagents the agent tool can run -- write new ones here",
         "  workflows/*.py   scripts the workflow tool runs -- write new ones here",
         "  skills/<name>/   skills, each a folder with a SKILL.md -- write new ones here",
+        "  memory/          what you remember, one fact per file -- through the memory tool,",
+        "                   which lists what is in scope and loads one on request",
         "",
         f"CuaCode itself is installed at {repo}. Its integrations/ directory holds the",
         "bundled subagents, workflows and skills; a file of the same name in the user's",

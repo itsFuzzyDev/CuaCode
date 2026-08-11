@@ -1,0 +1,22 @@
+{
+    "properties": {
+        "action": {"type": "string",
+            "enum": ["list", "load", "search", "write", "delete", "rename_session"],
+            "description": "Operation to perform"},
+        "name": {"type": "string",
+            "description": "Memory name, lowercase-with-dashes (load, write, delete)"},
+        "description": {"type": "string",
+            "description": "One line saying what this memory is. Always in context, so it has to earn the line (write)"},
+        "body": {"type": "string",
+            "description": "The fact itself, and why it matters. Under 4000 characters (write)"},
+        "type": {"type": "string", "enum": ["user", "feedback", "project", "app", "reference"],
+            "description": "What kind of fact this is (write, default project)"},
+        "scope": {"type": "string",
+            "description": "global, project, or apps/<name>. As narrow as the fact is actually true (write, default global)"},
+        "source": {"type": "string", "enum": ["user", "agent", "external"],
+            "description": "Where the fact came from (write, default agent)"},
+        "query": {"type": "string", "description": "Text to look for, bodies included (search)"},
+        "title": {"type": "string", "description": "New session title, one short line (rename_session)"}
+    },
+    "required": ["action"]
+}

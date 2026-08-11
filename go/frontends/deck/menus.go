@@ -382,6 +382,7 @@ func (m *model) openSessions(data json.RawMessage) {
 	var reply struct {
 		Sessions []struct {
 			ID       string `json:"id"`
+			Title    string `json:"title"`
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
 			Messages int    `json:"messages"`
@@ -396,15 +397,21 @@ func (m *model) openSessions(data json.RawMessage) {
 
 	opts := make([]option, 0, len(reply.Sessions))
 	for _, s := range reply.Sessions {
-		label := s.ID
+		// The name when there is one, the id when there is not. A session is
+		// named a turn or two in, and an unnamed one showing its id is telling
+		// the truth about itself -- better than a label made from "hi".
+		label := strings.TrimSpace(s.Title)
+		hint := s.ID
+		if label == "" {
+			label, hint = s.ID, ""
+		}
 		if s.ID == reply.Active {
 			label += "  (current)"
 		}
-		hint := strings.TrimSpace(s.Provider + " " + s.Model)
-		if s.Messages > 0 {
-			hint = plural(s.Messages, "msg", "msgs") + "  " + hint
+		if meta := strings.TrimSpace(s.Provider + " " + s.Model); meta != "" {
+			hint = strings.TrimSpace(hint + "  " + meta)
 		}
-		opts = append(opts, option{label: label, hint: strings.TrimSpace(hint), value: s.ID})
+		opts = append(opts, option{label: label, hint: hint, value: s.ID})
 	}
 	m.openOverlay(ovSessions, "session", opts, -1)
 }

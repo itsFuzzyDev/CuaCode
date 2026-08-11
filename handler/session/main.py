@@ -32,7 +32,11 @@ class Session:
         now = store.now_iso()
         return cls(sid, {"id": sid, "created": now, "updated": now, "provider": provider,
                          "origin": provider, "model": model, "effort": effort_level,
-                         "title": "", "records": 0, "turns": 0, "read_files": []}, [])
+                         # title_source says who chose the name, which is what
+                         # decides whether anything is allowed to replace it;
+                         # title_attempts caps what the auto-namer may spend.
+                         "title": "", "title_source": "", "title_attempts": 0,
+                         "cwd": "", "records": 0, "turns": 0, "read_files": []}, [])
 
     @classmethod
     def open(cls, sid: str) -> "Session":
@@ -90,8 +94,43 @@ class Session:
     # sent and an assistant record is when it landed -- no second field needed.
     # replay only reads the keys it knows, so `ts` never reaches the provider.
     def add_user(self, text: str):
+        # Whether this is the opening message has to be asked before the record
+        # is appended, and it is asked at all because add_user also carries
+        # runtime notices -- a background job finishing must never get to name
+        # the conversation just because the real first message was a greeting.
+        first = not any(r.get("t") == "user" for r in self._records) and \
+                not any(r.get("t") == "user" for r in self._pending)
         self._pending.append({"t": "user", "ts": store.now_iso(), "text": text})
-        if not self.meta.get("title"): self.meta["title"] = text[:60]
+        if first and not self.meta.get("title") and self.meta.get("title_source", "") in ("", "stub"):
+            from integrations.memory import naming
+            # "" for a greeting, deliberately: a frontend showing the session id
+            # is telling the truth and a session called "hi" is not. The namer
+            # fills it in once there is something to name.
+            self.meta["title"], self.meta["title_source"] = naming.provisional(text), "stub"
+
+    def add_recall(self, text: str):
+        """A pointer block the runtime put in front of the model.
+
+        Its own record type rather than glued onto the user's text: the records
+        are what the conversation *was*, and a line the user never typed must
+        not read back as one. replay folds it into the user turn it belongs to,
+        which is where the provider needs it -- two user messages in a row is a
+        400 on anthropic.
+        """
+        self._pending.append({"t": "recall", "ts": store.now_iso(), "text": text})
+
+    def set_title(self, title: str, source: str = "auto"):
+        self.meta["title"], self.meta["title_source"] = title, source
+        if self._records: store.write_json(self.dir / "meta.json", self.meta)
+
+    def set_cwd(self, path: str):
+        """Where this conversation is happening. Recorded for recall: matching
+        directories is the strongest signal there is for "what did we do here
+        last time", and it costs a string in meta.json rather than a read of
+        the conversation itself."""
+        if path and path != self.meta.get("cwd"):
+            self.meta["cwd"] = str(path)
+            if self._records: store.write_json(self.dir / "meta.json", self.meta)
 
     def add_assistant(self, thinking: str, content: str, native: list, usage: dict = None):
         calls = [{"name": c.name, "args": c.args}

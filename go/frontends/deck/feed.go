@@ -341,6 +341,18 @@ func (m *model) fold(ev session.Event) {
 		}
 		m.push(&block{kind: kResumed, text: text})
 
+	case "session_title":
+		// The worker named the conversation, a turn or two after it started.
+		// Said once, quietly: it changes nothing on screen, and the only reason
+		// to mention it is so the name in the session picker later is not a
+		// surprise.
+		var reply struct {
+			Title string `json:"title"`
+		}
+		if json.Unmarshal(p.Data, &reply) == nil && reply.Title != "" {
+			m.notice(cGhost, "named · "+sanitize(reply.Title))
+		}
+
 	case "provider":
 		// The switch is confirmed here rather than where it was asked for: the
 		// worker resolves the model, and the status bar should say what it
