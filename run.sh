@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 
 if [ $# -eq 0 ]; then
     echo "usage: ./run.sh <frontend>"
+    echo "       ./run.sh --usage [--days N] [--json]"
     echo "frontends:"
     for d in go/frontends/*/; do
         [ -d "$d" ] && echo "  $(basename "$d")"
@@ -18,6 +19,18 @@ fi
 
 name="$1"
 shift
+
+# Not a frontend: a question about the app rather than a conversation with it.
+# The worker prints what every session has cost and exits, so it never starts a
+# session of its own to answer.
+if [ "$name" = "--usage" ] || [ "$name" = "usage" ]; then
+    py="${CUACODE_PYTHON:-}"
+    for cand in venv/bin/python3 venv/bin/python .venv/bin/python3 .venv/bin/python; do
+        [ -n "$py" ] && break
+        [ -x "$cand" ] && py="$cand"
+    done
+    exec "${py:-python3}" main.py --usage "$@"
+fi
 
 if [ ! -d "go/frontends/$name" ]; then
     echo "error: no such frontend: $name" >&2

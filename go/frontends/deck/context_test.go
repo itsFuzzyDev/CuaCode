@@ -81,6 +81,43 @@ func TestContextSplitsTheRound(t *testing.T) {
 	}
 }
 
+const usageReply = `{"sessions":41,"unmeasured":137,"since":"2026-07-14",
+"total":{"in":1240000,"out":184000,"think":96000,"rounds":612,"secs":11520.0,"est":true},
+"models":[
+ {"name":"anthropic claude-opus-5","in":980000,"out":142000,"think":74000,"rounds":412,"secs":8200.0,"est":true},
+ {"name":"ollama glm-5.2","in":260000,"out":42000,"think":22000,"rounds":200,"secs":3320.0}],
+"days":[{"day":"2026-08-09","in":90000,"out":12000},{"day":"2026-08-10","in":210000,"out":31000},
+ {"day":"2026-08-11","in":41000,"out":6000}],
+"top":[{"id":"20260810-101112-aa11","title":"fix screenshot on windows","in":170000,"out":14000},
+ {"id":"20260809-090000-bb22","title":"","in":90000,"out":9000}],
+"session":{"id":"20260811-120000-cc33","in":31000,"out":2000,"rounds":4}}`
+
+// The usage page is a feed block like any other and obeys the same width rule,
+// and it must never quietly drop the sessions nobody measured — unmeasured is
+// not the same as free.
+func TestUsagePageFitsAndDeclaresUnmeasured(t *testing.T) {
+	for w := 30; w <= 160; w += 7 {
+		m := initialModel()
+		m.width, m.height = w, 50
+		m.takeUsage([]byte(usageReply))
+
+		page := m.renderUsage(m.blocks[len(m.blocks)-1])
+		for _, row := range page {
+			if got := vw(plainOf(row)); got > w {
+				t.Fatalf("width %d: row of %d cells: %q", w, got, plainOf(row))
+			}
+		}
+		if w >= 80 {
+			flat := plainOf(strings.Join(page, "\n"))
+			for _, want := range []string{"137 sessions reported nothing", "~96k", "claude-opus-5", "2026-08-10"} {
+				if !strings.Contains(flat, want) {
+					t.Errorf("width %d: usage page missing %q", w, want)
+				}
+			}
+		}
+	}
+}
+
 // A live rate prices the thinking that is still being written; the round's own
 // count replaces it when the provider bills it. Both land on the same row.
 func TestRatePricesThinkingLive(t *testing.T) {

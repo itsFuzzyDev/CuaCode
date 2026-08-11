@@ -331,6 +331,172 @@ func (m *model) turnRow(t ctxTurn, width int) []string {
 	return rows
 }
 
+// ---------------------------------------------------------------------------
+// /usage — every conversation, added up
+
+type usageBucket struct {
+	Name    string  `json:"name"` // model rows only
+	ID      string  `json:"id"`   // session rows only
+	Title   string  `json:"title"`
+	Day     string  `json:"day"`
+	In      int     `json:"in"`
+	Out     int     `json:"out"`
+	Think   int     `json:"think"`
+	Rounds  int     `json:"rounds"`
+	Peak    int     `json:"peak"` // the largest single prompt behind that In total
+	Secs    float64 `json:"secs"`
+	Est     bool    `json:"est"`
+	Updated string  `json:"updated"`
+}
+
+func (b usageBucket) spent() int { return b.In + b.Out }
+
+type usageReport struct {
+	Sessions   int           `json:"sessions"`
+	Unmeasured int           `json:"unmeasured"`
+	Since      string        `json:"since"`
+	Total      usageBucket   `json:"total"`
+	Models     []usageBucket `json:"models"`
+	Days       []usageBucket `json:"days"`
+	Top        []usageBucket `json:"top"`
+	Session    usageBucket   `json:"session"`
+}
+
+func (m *model) takeUsage(data json.RawMessage) {
+	var rep usageReport
+	if json.Unmarshal(data, &rep) != nil {
+		m.notice(cGhost, "could not read the usage report")
+		return
+	}
+	m.boundary()
+	m.push(&block{kind: kUsage, usage: &rep})
+}
+
+// tokens renders a count with the tilde that marks an estimated one, so a
+// thinking figure never passes itself off as something the provider charged.
+func estTokens(n int, est bool) string {
+	if est {
+		return "~" + fmtTokens(n)
+	}
+	return fmtTokens(n)
+}
+
+// renderUsage draws the rollup: the whole total, then who spent it, then when,
+// then which conversations. Bars for the days, because a month of numbers is a
+// month of numbers and the question is which day was the expensive one.
+func (m *model) renderUsage(b *block) []string {
+	rep := b.usage
+	if rep == nil {
+		return nil
+	}
+	width := m.bodyW()
+	inner := width - 4
+
+	head := plural(rep.Sessions, "session", "sessions")
+	if rep.Since != "" {
+		head += sep + "since " + rep.Since
+	}
+	line := func(label, body string) string {
+		return margin + "  " + trunc(paint(cMuted, padTo(label, 14))+body, inner)
+	}
+	rows := []string{
+		margin + trunc(paint(cRule, "▸ ")+paint(cInk+bold, "usage")+paint(cGhost, sep+head), width),
+		"",
+		// "prompt sent", not "tokens in": the prompt goes up again in full every
+		// round, so a 10k conversation that took two rounds was charged 20k of
+		// input while never holding more than 10k. The sum is what was billed,
+		// the peak is how big the thing actually got, and a page showing only
+		// the first invites exactly the double-take it should be preventing.
+		line("prompt sent", paint(cInk, fmtTokens(rep.Total.In))+paint(cFaint, prompted(rep.Total.Peak))),
+		line("tokens out", paint(cInk, fmtTokens(rep.Total.Out))+
+			paint(cThink, "   of which thinking "+estTokens(rep.Total.Think, rep.Total.Est))),
+		line("rounds", paint(cInk, itoa(rep.Total.Rounds))),
+		line("generating", paint(cInk, fmtDur(time.Duration(rep.Total.Secs*float64(time.Second))))+
+			paint(cFaint, fmt.Sprintf("   %.0f tok/s average", rate(rep.Total)))),
+	}
+	// Said rather than skipped: sessions from before any of this was recorded,
+	// or run against a provider that reports no usage, are not free — they are
+	// unmeasured, and a total that quietly dropped them would read as complete.
+	if rep.Unmeasured > 0 {
+		rows = append(rows, margin+"  "+paint(cGhost,
+			trunc(plural(rep.Unmeasured, "session", "sessions")+" reported nothing and are not counted", inner)))
+	}
+
+	if len(rep.Models) > 0 {
+		rows = append(rows, "", margin+"  "+paint(cInk+bold, "by model"))
+		wide := 0
+		for _, mb := range rep.Models {
+			wide = max(wide, vw(mb.Name))
+		}
+		for _, mb := range rep.Models {
+			line := paint(cDrive, padTo(mb.Name, wide+3)) +
+				paint(cMuted, "in ") + paint(cInk, padTo(fmtTokens(mb.In), 8)) +
+				paint(cMuted, "out ") + paint(cInk, padTo(fmtTokens(mb.Out), 8)) +
+				paint(cThink, padTo("think "+estTokens(mb.Think, mb.Est), 14)) +
+				paint(cOK, fmt.Sprintf("%.0f tok/s", rate(mb)))
+			rows = append(rows, margin+"  "+trunc(line, inner))
+		}
+	}
+
+	if len(rep.Days) > 0 {
+		rows = append(rows, "", margin+"  "+paint(cInk+bold, "by day"))
+		days := rep.Days
+		if len(days) > 14 {
+			days = days[len(days)-14:]
+		}
+		peak := 1
+		for _, d := range days {
+			peak = max(peak, d.spent())
+		}
+		// The bar takes what the row has left over, so it stays a comparison at
+		// any width rather than a fixed shape that overflows a narrow one.
+		span := max(min(inner-24, 28), 6)
+		for _, d := range days {
+			n := max(d.spent()*span/peak, 1)
+			bar := paint(cCall, strings.Repeat("█", n)) + paint(cGhost, strings.Repeat("░", span-n))
+			rows = append(rows, margin+"  "+trunc(paint(cMuted, d.Day+"  ")+bar+
+				paint(cInk, "  "+fmtTokens(d.spent())), inner))
+		}
+	}
+
+	if len(rep.Top) > 0 {
+		rows = append(rows, "", margin+"  "+paint(cInk+bold, "heaviest conversations"))
+		for _, s := range rep.Top {
+			label := s.Title
+			if label == "" {
+				label = s.ID // named a turn or two in; until then the id is the truth
+			}
+			line := paint(cUser, padTo(trunc(label, max(inner-16, 12)), max(inner-16, 12))) +
+				paint(cInk, padLeft(fmtTokens(s.spent()), 8))
+			rows = append(rows, margin+"  "+trunc(line, inner))
+		}
+	}
+
+	if rep.Session.Rounds > 0 {
+		rows = append(rows, "", margin+"  "+trunc(paint(cInk+bold, "this conversation")+
+			paint(cGhost, sep+fmtTokens(rep.Session.spent())+" tokens over "+
+				plural(rep.Session.Rounds, "round", "rounds")), inner))
+	}
+	return append(rows, "", margin+"  "+paint(cGhost,
+		trunc("counted from what providers charged · main.py --usage for the same figures in a shell", inner)))
+}
+
+// prompted explains the input total. The peak is unknown for sessions rolled up
+// before it was recorded, and an unknown peak says nothing rather than zero.
+func prompted(peak int) string {
+	if peak <= 0 {
+		return "   re-sent each round"
+	}
+	return "   re-sent each round · largest " + fmtTokens(peak)
+}
+
+func rate(b usageBucket) float64 {
+	if b.Secs < 1 {
+		return 0
+	}
+	return float64(b.Out) / b.Secs
+}
+
 // renderContext draws the whole page: grid, legend, the loaded-on-demand
 // sections, and what the last round cost.
 func (m *model) renderContext(b *block) []string {

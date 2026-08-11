@@ -1,6 +1,7 @@
 import os, sys
 from pathlib import Path
 
+from handler import usage
 from handler.agent import effort, providers
 from handler.session import blobs, replay, store
 
@@ -92,14 +93,21 @@ class Session:
         self._pending.append({"t": "user", "ts": store.now_iso(), "text": text})
         if not self.meta.get("title"): self.meta["title"] = text[:60]
 
-    def add_assistant(self, thinking: str, content: str, native: list):
+    def add_assistant(self, thinking: str, content: str, native: list, usage: dict = None):
         calls = [{"name": c.name, "args": c.args}
                  for c in providers.get(self.provider).parse_calls(native)]
         # Stamped with the provider that produced it: once you can switch
         # mid-session, `native` is only reusable by the dialect that wrote it.
-        self._pending.append({"t": "assistant", "ts": store.now_iso(), "p": self.provider,
-                              "thinking": thinking, "content": content, "calls": calls,
-                              "native": native})
+        rec = {"t": "assistant", "ts": store.now_iso(), "p": self.provider,
+               "thinking": thinking, "content": content, "calls": calls, "native": native}
+        # What the round cost, on the round rather than on a counter somewhere
+        # else. It is the only place the numbers are unambiguous -- one round,
+        # one model, one set of counts -- and it means a rewind takes the cost
+        # away with the turn instead of leaving the session charged for it.
+        # Absent when the provider reported nothing, which is not the same as
+        # zero and must not be recorded as it.
+        if usage: rec["u"] = usage
+        self._pending.append(rec)
 
     def add_tool(self, name: str, result: dict):
         self._pending.append({"t": "tool", "ts": store.now_iso(), "name": name, "result": result})
@@ -117,7 +125,12 @@ class Session:
         self._mark = 0
         self.meta.update(updated=store.now_iso(), records=len(self._records),
                          turns=sum(1 for r in self._records if r.get("t") == "assistant"),
-                         read_files=_read_files())
+                         read_files=_read_files(),
+                         # Rolled up here so a question about every conversation
+                         # ever can be answered from the meta files alone.
+                         # Recomputed rather than incremented: a rewound round
+                         # takes its cost with it.
+                         usage=usage.of_records(self._records))
         store.write_json(self.dir / "meta.json", self.meta)
 
     def _split(self, rec: dict) -> dict:

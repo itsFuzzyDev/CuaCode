@@ -1,12 +1,20 @@
 import sys, os, time
 sys.path.insert(0, os.path.dirname(__file__))
+
+# Before anything starts talking. --usage is a question about the app rather
+# than a conversation with it: it prints what every session has cost and exits,
+# without opening a session of its own to ask.
+if "--usage" in sys.argv:
+    from handler import usage as _usage
+    sys.exit(_usage.cli(sys.argv[1:]))
+
 from handler.protocol import IPC
 from handler.agent.main import generate
 from handler.agent import providers
 from handler.agent.background import JOBS
 from handler.session import store
 from handler.session.main import Session
-from handler import config, context, environment
+from handler import config, context, environment, usage
 
 SETTINGS = config.settings()
 
@@ -210,6 +218,18 @@ while True:
             except Exception as e:
                 ipc.reply(env, "status", {"state": "error", "error": str(e)})
 
+        elif action == "usage.report":
+            # The same rollup `--usage` prints, for a frontend that would rather
+            # draw it. Read from the meta files, so a hundred conversations cost
+            # a hundred small json reads and not one transcript.
+            try: days = int(env.data.get("days") or 0)
+            except (TypeError, ValueError): days = 0
+            rep = usage.rollup(days)
+            # This conversation's own, including the rounds not yet committed --
+            # the session you are in is the one you are asking about.
+            rep["session"] = {"id": sess.id, **(usage.of_records(sess.records()) or {})}
+            ipc.reply(env, "usage", rep)
+
         elif action == "session.list":
             ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})
         elif action == "provider.list":
@@ -363,6 +383,11 @@ while True:
             ctx["session_dir"] = str(sess.dir)
             ipc.begin_run()
             round_mark = len(messages)
+            # What the round in flight has been charged, held only until the
+            # assistant record it belongs to is written. Cleared per round, so a
+            # round the provider never reported on is recorded as unmeasured
+            # rather than inheriting the previous round's numbers.
+            round_cost = {}
             try:
                 # The provider half of the settings is account-wide and the
                 # effort is this conversation's, so they are joined per turn
@@ -393,9 +418,11 @@ while True:
                         # before yielding this, so the two stay in step and a
                         # rewind here drops exactly the round it drops.
                         round_mark = len(messages)
+                        round_cost = {}
                         sess.round_start()
                     elif typ == "assistant":
-                        sess.add_assistant(chunk.get("thinking", ""), chunk.get("content", ""), chunk.get("tool_calls") or [])
+                        sess.add_assistant(chunk.get("thinking", ""), chunk.get("content", ""),
+                                           chunk.get("tool_calls") or [], usage=round_cost)
                     elif typ == "cancelled":
                         messages = chunk.get("messages", messages)
                         sess.rewind()
@@ -411,6 +438,10 @@ while True:
                         # own status rather than a field on the next token: a
                         # tool loop can run for minutes without one.
                         turn = turn_fields(chunk)
+                        # Kept for the assistant record that is about to be
+                        # written: the counts arrive one yield before the turn
+                        # they describe.
+                        round_cost = usage.stamp(turn, SETTINGS["provider"], SETTINGS.get("model", ""))
                         fields = {**context_fields(chunk.get("usage")), **turn}
                         if fields:
                             ipc.reply(env, "status", {"state": "usage", **fields})

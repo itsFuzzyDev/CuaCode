@@ -164,6 +164,7 @@ type command struct {
 var commands = []command{
 	{"help", "keys and commands"},
 	{"context", "what is filling the window"},
+	{"usage", "what every conversation has cost"},
 	{"new", "start a fresh session"},
 	{"provider", "switch provider"},
 	{"effort", "how hard the model thinks"},
@@ -309,6 +310,11 @@ func (m *model) runCommand(name string) {
 		// Answered from what the worker already holds, so it costs nothing and
 		// can be asked mid-run without disturbing anything.
 		m.command("context.report", nil)
+
+	case "usage":
+		// Every session, not this one: read out of the meta files the worker
+		// already writes, which is why it can afford to be asked casually.
+		m.command("usage.report", nil)
 
 	case "clear":
 		m.reset()

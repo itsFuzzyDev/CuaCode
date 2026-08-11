@@ -32,6 +32,7 @@ const (
 	kResumed
 	kUltra
 	kContext
+	kUsage
 )
 
 type actState int
@@ -70,10 +71,12 @@ type block struct {
 	start, end time.Time
 	open       bool // still collecting results — the header clock ticks
 
-	// The readout that draws a page of numbers rather than text: what is in the
-	// window now. Held as the worker reported it, so a resize redraws the same
-	// reading rather than a stale rendering of it.
-	ctx *ctxReport
+	// The two readouts that draw a page of numbers rather than text: what is in
+	// the window now, and what every conversation has cost. Held as the worker
+	// reported them, so a resize redraws the same reading rather than a stale
+	// rendering of it.
+	ctx   *ctxReport
+	usage *usageReport
 
 	// What this block cost and how fast it arrived. Only ever set on a thinking
 	// block: the price of a thought is the one thing on screen that the text
@@ -504,6 +507,8 @@ func (m *model) renderBlock(b *block, flags uint8, live bool) []string {
 		return m.renderUltra(b)
 	case kContext:
 		return m.renderContext(b)
+	case kUsage:
+		return m.renderUsage(b)
 	}
 	return nil
 }

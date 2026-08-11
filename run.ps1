@@ -22,9 +22,23 @@ Set-Location -LiteralPath $PSScriptRoot
 
 if (-not $Name) {
     Write-Host "usage: .\run.ps1 <frontend>"
+    Write-Host "       .\run.ps1 --usage [--days N] [--json]"
     Write-Host "frontends:"
     Get-ChildItem -Directory go\frontends | ForEach-Object { Write-Host "  $($_.Name)" }
     exit 1
+}
+
+# Not a frontend: a question about the app rather than a conversation with it.
+# The worker prints what every session has cost and exits, so it never starts a
+# session of its own to answer.
+if ($Name -in @('--usage', 'usage')) {
+    $py = $env:CUACODE_PYTHON
+    if (-not $py) {
+        $venvPy = Join-Path $PSScriptRoot 'venv\Scripts\python.exe'
+        $py = if (Test-Path -LiteralPath $venvPy) { $venvPy } else { 'python' }
+    }
+    & $py (Join-Path $PSScriptRoot 'main.py') --usage @Rest
+    exit $LASTEXITCODE
 }
 
 if (-not (Test-Path -LiteralPath "go\frontends\$Name" -PathType Container)) {

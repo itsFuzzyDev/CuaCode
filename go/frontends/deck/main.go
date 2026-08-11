@@ -588,6 +588,11 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 			m.rebuild()
 			return m.ensureTick()
 
+		case "usage":
+			m.takeUsage(ev.Parsed.Data)
+			m.rebuild()
+			return m.ensureTick()
+
 		case "detail":
 			// One call, read back out of the records. It belongs to the
 			// inspector rather than the feed, which never asked for it.
