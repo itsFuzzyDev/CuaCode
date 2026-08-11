@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ const (
 	kNotice
 	kResumed
 	kUltra
+	kContext
 )
 
 type actState int
@@ -67,6 +69,19 @@ type block struct {
 	acts       []act
 	start, end time.Time
 	open       bool // still collecting results — the header clock ticks
+
+	// The readout that draws a page of numbers rather than text: what is in the
+	// window now. Held as the worker reported it, so a resize redraws the same
+	// reading rather than a stale rendering of it.
+	ctx *ctxReport
+
+	// What this block cost and how fast it arrived. Only ever set on a thinking
+	// block: the price of a thought is the one thing on screen that the text
+	// itself cannot show, and it is also the part of a long wait people most
+	// want an account of. Both move live while the round streams.
+	tokens int
+	tps    float64
+	tokEst bool // ...and whether the count was estimated rather than billed
 
 	rows  []string // cached rendering
 	rowsW int      // width it was rendered at
@@ -275,7 +290,15 @@ func (m *model) fold(ev session.Event) {
 		m.boundary()
 		m.notice(cCall, sanitize(head))
 
+	// Mid-run readings. Nothing goes in the feed for either — the status bar
+	// already moved — but they carry what the round's thinking is costing, and
+	// the thinking they are pricing is on screen above. "rate" is the live
+	// estimate, "usage" the count the provider actually charged.
+	case "rate", "usage":
+		m.priceThinking(ev)
+
 	case "done":
+		m.priceThinking(ev)
 		m.closeCalls()
 		m.finish()
 
@@ -339,6 +362,37 @@ func (m *model) fold(ev session.Event) {
 	// "model" carries the raw provider chunk for debugging, and the bare
 	// acknowledgements carry nothing worth a row. Both stay out of the feed.
 	case "", "model", "stopped", "cancel_ack", "deleted":
+	}
+}
+
+// priceThinking puts a round's thinking cost on the thinking it paid for.
+//
+// It runs twice over: once per live rate while the thought is still being
+// written, and again from the provider's own count when the round is billed. So
+// the figure is there during the wait, which is when it is worth having, and
+// correct afterwards. The walk stops at the last user message — a round reports
+// its own thinking, and an earlier turn's must never be relabelled with this
+// one's number.
+func (m *model) priceThinking(ev session.Event) {
+	n, rate := ev.Parsed.ThinkTokens, ev.Parsed.ThinkTPS
+	if n <= 0 && rate <= 0 {
+		return
+	}
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		b := m.blocks[i]
+		if b.kind == kUser {
+			return
+		}
+		if b.kind == kThink {
+			if n > 0 {
+				b.tokens, b.tokEst = n, ev.Parsed.ThinkEst
+			}
+			if rate > 0 {
+				b.tps = rate
+			}
+			b.touch()
+			return
+		}
 	}
 }
 
@@ -448,6 +502,8 @@ func (m *model) renderBlock(b *block, flags uint8, live bool) []string {
 		return m.renderResumed(b)
 	case kUltra:
 		return m.renderUltra(b)
+	case kContext:
+		return m.renderContext(b)
 	}
 	return nil
 }
@@ -580,11 +636,30 @@ func (m *model) renderThinking(b *block, expanded, live bool) []string {
 		return nil
 	}
 
-	// The count is of lines at full width — what expanding would actually
-	// reveal — while the preview gives up room to say so.
+	// What it cost and what expanding would reveal. The cost goes first because
+	// it is the one of the two that says whether the wait was worth anything;
+	// the tilde marks a provider that bills thinking without itemising it, so
+	// the figure is this end's estimate rather than what was charged.
 	tag := ""
 	if n := len(body) - 1; n > 0 {
 		tag = plural(n, "more line", "more lines")
+	}
+	if b.tokens > 0 || b.tps > 0 {
+		var cost []string
+		if b.tokens > 0 {
+			n := fmtTokens(b.tokens) + " tokens"
+			if b.tokEst {
+				n = "~" + n // this provider bills thinking without itemising it
+			}
+			cost = append(cost, n)
+		}
+		if b.tps > 0 {
+			cost = append(cost, fmt.Sprintf("%.0f tok/s", b.tps))
+		}
+		if tag != "" {
+			cost = append(cost, tag)
+		}
+		tag = strings.Join(cost, sep)
 	}
 
 	head := trunc(body[0], max(width-vw(label)-vw(tag)-2, 8))

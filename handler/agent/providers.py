@@ -31,8 +31,20 @@ def _int(obj, *names):
         if isinstance(v, int): return v
     return None
 
+def _sub(obj, *names):
+    """A nested holder off a usage object, whichever of these names it uses."""
+    for n in names:
+        v = obj.get(n) if isinstance(obj, dict) else getattr(obj, n, None)
+        if v is not None: return v
+    return None
+
 def usage_of(raw) -> dict:
     """Token counts off one streamed frame, as {"input": n, "output": n}.
+
+    "reasoning" joins them when the provider breaks the reply down that far.
+    Only openai's dialect does: anthropic bills thinking inside output_tokens
+    and never says how much of it was thinking, so a caller that wants the
+    number there has to estimate it from the text it already streamed.
 
     Only what the frame actually carried: a caller merges these, because no
     provider puts both halves in one place. Ollama counts on its final chunk,
@@ -63,6 +75,9 @@ def usage_of(raw) -> dict:
                              + (_int(u, "cache_creation_input_tokens") or 0)
         if (n := _int(u, "completion_tokens", "output_tokens")) is not None:
             out["output"] = n
+        det = _sub(u, "completion_tokens_details", "output_tokens_details")
+        if det is not None and (n := _int(det, "reasoning_tokens")) is not None:
+            out["reasoning"] = n
     return out
 
 @dataclass

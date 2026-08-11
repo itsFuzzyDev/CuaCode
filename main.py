@@ -6,7 +6,7 @@ from handler.agent import providers
 from handler.agent.background import JOBS
 from handler.session import store
 from handler.session.main import Session
-from handler import config, environment
+from handler import config, context, environment
 
 SETTINGS = config.settings()
 
@@ -27,6 +27,19 @@ messages = sess.messages()
 # gets to tomorrow is still answered tomorrow -- and a frontend that does not
 # implement the reply would otherwise hang the run instead of waiting for it.
 ASK_PERMISSION = False
+
+# What the last round actually cost, kept so /context can report it long after
+# the event that carried it went past. One round, not a running total: the
+# question it answers is "how is this model behaving right now", and a session
+# average would smooth away exactly the turn worth asking about.
+LAST_TURN = {}
+
+def turn_fields(chunk: dict) -> dict:
+    """What the round that just generated cost, and remember it for /context."""
+    fields = context.turn_fields(chunk)
+    LAST_TURN.clear()
+    LAST_TURN.update({"input": (chunk.get("usage") or {}).get("input", 0), **fields})
+    return fields
 
 def context_fields(usage: dict) -> dict:
     """The context readout, as far as this turn can tell it.
@@ -185,6 +198,18 @@ while True:
             try: want = int(env.data.get("index", -1))
             except (TypeError, ValueError): want = -1
             ipc.reply(env, "detail", tool_detail(sess, want))
+        elif action == "context.report":
+            # What the window is full of, read off what is already loaded. It
+            # asks the provider nothing -- a readout that spent tokens to say how
+            # many tokens you had spent would be a poor joke -- so it is answered
+            # from the prompt, the tool schemas and the history in memory, and
+            # says plainly which of its numbers were measured and which estimated.
+            try:
+                ipc.reply(env, "context", context.report(sess, SETTINGS, ctx,
+                                                         messages=messages, last=LAST_TURN))
+            except Exception as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+
         elif action == "session.list":
             ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})
         elif action == "provider.list":
@@ -277,6 +302,8 @@ while True:
         elif action == "session.new":
             # Carried over rather than reset: starting a fresh chat is not a
             # request to go back to whatever the provider does by default.
+            # Last round's cost belonged to the conversation that just went.
+            LAST_TURN.clear()
             sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
                                   effort_level=sess.effort)
             messages = sess.messages()
@@ -286,8 +313,9 @@ while True:
             try:
                 loaded = Session.open(env.data.get("id", ""))
                 loaded.restore_tool_state()
+                LAST_TURN.clear()
                 sess, messages = loaded, loaded.messages()
-                # The status goes first so a frontend can clear whatever it was
+                    # The status goes first so a frontend can clear whatever it was
                 # showing before the replayed conversation starts arriving.
                 ipc.reply(env, "status", {"state": "session", "session_id": sess.id,
                                           "effort": sess.effort, "msg_count": len(messages)})
@@ -373,17 +401,25 @@ while True:
                         sess.rewind()
                         sess.commit()
                         ipc.reply(env, "token", {"state": "cancelled", "token": "cancelled", "status": "cancelled", "msg_count": len(messages)})
+                    elif typ == "rate":
+                        # No "status" key: this says how fast, not what state
+                        # the run is in, and a rate arriving mid-stream must not
+                        # move a frontend off tooling or thinking.
+                        ipc.reply(env, "status", {"state": "rate", **context.rate_fields(chunk)})
                     elif typ == "usage":
                         # Mid-run, once a round's request has been counted. Its
                         # own status rather than a field on the next token: a
                         # tool loop can run for minutes without one.
-                        if fields := context_fields(chunk.get("usage")):
+                        turn = turn_fields(chunk)
+                        fields = {**context_fields(chunk.get("usage")), **turn}
+                        if fields:
                             ipc.reply(env, "status", {"state": "usage", **fields})
                     elif typ == "done":
                         messages = chunk.get("messages", messages)
                         sess.commit()
                         ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done",
-                                                 "msg_count": len(messages), **context_fields(chunk.get("usage"))})
+                                                 "msg_count": len(messages),
+                                                 **context_fields(chunk.get("usage")), **turn_fields(chunk)})
                     elif typ == "tool_calls":
                         ipc.reply(env, "token", {"state": "tool_calls", "token": chunk.get("text"), "status": "tooling"})
                     elif typ == "background":

@@ -15,6 +15,21 @@ type Event struct {
 	ContextLeft int    // tokens remaining, -1 if not reported
 	ContextUsed int    // tokens spent, -1 if not reported
 	ContextMax  int    // size of the model's window, -1 if not known
+
+	// What the round generated, and how fast — live from characters while it is
+	// still arriving, then again from the provider's own count once the round is
+	// billed. -1 where the worker said nothing: a provider that reports no usage
+	// reports none of this either, and a zero would read as a measurement rather
+	// than as a silence.
+	Phase       string  // which half is generating right now: thinking | content
+	OutTokens   int     // tokens of reply, thinking included
+	ThinkTokens int     // ...of which thinking, when it can be told apart
+	ReplyTokens int     // ...and of which answer
+	ThinkEst    bool    // the thinking figure was estimated, not billed
+	TPS         float64 // tokens per second across the round, -1 if not reported
+	ThinkTPS    float64 // ...while it was thinking
+	ReplyTPS    float64 // ...while it was answering
+	TPSEst      bool    // the rate came from characters, not from a token count
 }
 
 type eventPayload struct {
@@ -26,6 +41,15 @@ type eventPayload struct {
 	ContextLeft *int            `json:"context_left"`
 	ContextUsed *int            `json:"context_used"`
 	ContextMax  *int            `json:"context_max"`
+	Phase       *string         `json:"phase"`
+	OutTokens   *int            `json:"out_tokens"`
+	ThinkTokens *int            `json:"thinking_tokens"`
+	ReplyTokens *int            `json:"reply_tokens"`
+	ThinkEst    *bool           `json:"thinking_est"`
+	TPS         *float64        `json:"tps"`
+	ThinkTPS    *float64        `json:"think_tps"`
+	ReplyTPS    *float64        `json:"reply_tps"`
+	TPSEst      *bool           `json:"tps_est"`
 }
 
 // decodeToken renders a token payload as text. The worker sends a JSON string
@@ -41,7 +65,8 @@ func decodeToken(raw json.RawMessage) string {
 
 // ParseEvent decodes one stdout line into a typed Event.
 func ParseEvent(raw []byte) (Event, error) {
-	ev := Event{MsgCount: -1, ContextLeft: -1, ContextUsed: -1, ContextMax: -1}
+	ev := Event{MsgCount: -1, ContextLeft: -1, ContextUsed: -1, ContextMax: -1,
+		OutTokens: -1, ThinkTokens: -1, ReplyTokens: -1, TPS: -1, ThinkTPS: -1, ReplyTPS: -1}
 	if err := json.Unmarshal(raw, &ev.Envelope); err != nil {
 		return ev, err
 	}
@@ -73,6 +98,33 @@ func ParseEvent(raw []byte) (Event, error) {
 		}
 		if p.ContextMax != nil {
 			ev.ContextMax = *p.ContextMax
+		}
+		if p.Phase != nil {
+			ev.Phase = *p.Phase
+		}
+		if p.OutTokens != nil {
+			ev.OutTokens = *p.OutTokens
+		}
+		if p.ThinkTokens != nil {
+			ev.ThinkTokens = *p.ThinkTokens
+		}
+		if p.ReplyTokens != nil {
+			ev.ReplyTokens = *p.ReplyTokens
+		}
+		if p.ThinkEst != nil {
+			ev.ThinkEst = *p.ThinkEst
+		}
+		if p.TPS != nil {
+			ev.TPS = *p.TPS
+		}
+		if p.ThinkTPS != nil {
+			ev.ThinkTPS = *p.ThinkTPS
+		}
+		if p.ReplyTPS != nil {
+			ev.ReplyTPS = *p.ReplyTPS
+		}
+		if p.TPSEst != nil {
+			ev.TPSEst = *p.TPSEst
 		}
 	}
 	return ev, nil

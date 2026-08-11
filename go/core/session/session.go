@@ -34,6 +34,22 @@ type Snapshot struct {
 	ContextLeft int    // tokens remaining (0 until the worker reports it)
 	ContextUsed int    // tokens the conversation currently occupies
 	ContextMax  int    // the model's window, 0 when its size is not known
+
+	// The round that is generating, or the last one that did: what it wrote, how
+	// much of that was thinking rather than answer, and how fast each half came
+	// out. It moves live while the round streams — estimated from characters,
+	// which TPSEst says out loud — and is replaced by the provider's own count
+	// when the round is billed. Held afterwards, because it describes the round
+	// it belongs to and stays true once that round is over.
+	Phase       string // thinking | content, while one is streaming
+	OutTokens   int
+	ThinkTokens int
+	ReplyTokens int
+	ThinkEst    bool // the thinking figure was estimated, not billed
+	TPS         float64
+	ThinkTPS    float64
+	ReplyTPS    float64
+	TPSEst      bool // the rate came from characters, not from a token count
 }
 
 // Event is delivered to the notify callback for every worker line. It is a
@@ -101,6 +117,11 @@ func (s *Session) SendChat(text string) (string, error) {
 	id := fmt.Sprintf("msg-%d", s.msgSeq)
 	s.snap.Msgs++
 	s.snap.State = Running
+	// The rate belonged to the round that just ended. Cleared rather than left
+	// standing: a figure from the last answer, sitting next to a spinner for the
+	// next one, reads as this round's and is not.
+	s.snap.Phase, s.snap.TPS, s.snap.ThinkTPS, s.snap.ReplyTPS = "", 0, 0, 0
+	s.snap.OutTokens, s.snap.ThinkTokens, s.snap.ReplyTokens = 0, 0, 0
 	w := s.worker
 	s.mu.Unlock()
 
@@ -297,6 +318,27 @@ func (s *Session) apply(ev protocol.Event) {
 	}
 	if ev.ContextMax > 0 {
 		s.snap.ContextMax = ev.ContextMax
+	}
+	if ev.Phase != "" {
+		s.snap.Phase = ev.Phase
+	}
+	if ev.OutTokens >= 0 {
+		s.snap.OutTokens = ev.OutTokens
+	}
+	if ev.ThinkTokens >= 0 {
+		s.snap.ThinkTokens, s.snap.ThinkEst = ev.ThinkTokens, ev.ThinkEst
+	}
+	if ev.ReplyTokens >= 0 {
+		s.snap.ReplyTokens = ev.ReplyTokens
+	}
+	if ev.TPS >= 0 {
+		s.snap.TPS, s.snap.TPSEst = ev.TPS, ev.TPSEst
+	}
+	if ev.ThinkTPS >= 0 {
+		s.snap.ThinkTPS = ev.ThinkTPS
+	}
+	if ev.ReplyTPS >= 0 {
+		s.snap.ReplyTPS = ev.ReplyTPS
 	}
 }
 

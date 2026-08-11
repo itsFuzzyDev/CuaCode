@@ -423,6 +423,38 @@ func (m *model) modelChip() string {
 	return paint(cGhost, m.provider+" ") + paint(cMuted, name)
 }
 
+// rateSeg is how fast the round is generating, beside the elapsed clock: the
+// two together are the difference between "this model is slow" and "this turn
+// was long", which the clock on its own cannot tell you.
+//
+// It is live. While the round streams, the worker estimates the rate from the
+// characters it has sent, and a tilde says so; when the provider bills the round
+// the measured figure replaces it and the tilde goes. The distinction is worth
+// the one cell it costs — an estimate that presented itself as a measurement
+// would be believed.
+func (m *model) rateSeg() string {
+	st := m.status
+	if st.TPS <= 0 {
+		return ""
+	}
+	rate := fmt.Sprintf("%.0f tok/s", st.TPS)
+	if st.TPSEst {
+		rate = "~" + rate
+	}
+	out := paint(cMuted, rate)
+	// Thinking is the half of a reply nobody reads and everybody waits for, so
+	// what it cost is worth carrying next to the rate rather than buried in
+	// /context. Its own rate stays on the thinking row, where the text is.
+	if n := st.ThinkTokens; n > 0 {
+		tag := fmtTokens(n) + " think"
+		if st.ThinkEst {
+			tag = "~" + tag
+		}
+		out += paint(cGhost, barSep) + paint(cThink, tag)
+	}
+	return out
+}
+
 // statePill is the one loud thing on the bar. Reversed rather than coloured:
 // the state is the answer to "can I type yet", and it should be findable
 // without reading anything.
@@ -556,6 +588,9 @@ func (m *model) renderStatus() string {
 	}
 	if d := m.runtime(); d > 0 {
 		left = append(left, seg{text: paint(cMuted, fmtDur(d)), drop: 3})
+	}
+	if rate := m.rateSeg(); rate != "" {
+		left = append(left, seg{text: rate, drop: 4})
 	}
 	// How far back you are looking, so a feed that is not moving while tokens
 	// arrive reads as scrolled rather than as stalled.

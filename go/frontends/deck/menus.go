@@ -163,6 +163,7 @@ type command struct {
 
 var commands = []command{
 	{"help", "keys and commands"},
+	{"context", "what is filling the window"},
 	{"new", "start a fresh session"},
 	{"provider", "switch provider"},
 	{"effort", "how hard the model thinks"},
@@ -303,6 +304,11 @@ func (m *model) runCommand(name string) {
 	switch name {
 	case "help":
 		m.notice(cGhost, helpText)
+
+	case "context":
+		// Answered from what the worker already holds, so it costs nothing and
+		// can be asked mid-run without disturbing anything.
+		m.command("context.report", nil)
 
 	case "clear":
 		m.reset()

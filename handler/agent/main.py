@@ -137,6 +137,12 @@ def _call_fn(reg: dict, name: str, args: dict, ctx, token: interrupt.Token):
     cctx = interrupt.ctx_with(ctx, token)
     return lambda: dispatch(reg, name, args, ctx=cctx)
 
+# How often a round reports the rate it is generating at. Often enough to read
+# as live, rarely enough that the readout is not itself a stream: the number is
+# derived from characters, and a figure recomputed every token would jitter far
+# more than the thing it is measuring.
+RATE_EVERY = 0.35
+
 _BG_NOTE = ("running in the background -- this is not the result. Read it with "
             "background(action=\"output\", job=\"{job}\") once it finishes, or check "
             "background(action=\"list\") to see whether it has.")
@@ -160,6 +166,28 @@ def _finished_note() -> str:
     return ("\n".join(lines) + "\n\nThese finished while you were working. Read one with "
             "background(action=\"output\", job=\"<id>\") when it is relevant to what you are "
             "doing; ignore it if it is not. This message is from the runtime, not the user.")
+
+def _span(start: float, end: float) -> float:
+    """How long a phase lasted, or 0 for one that never happened."""
+    return max(end - start, 0.0) if start and end else 0.0
+
+def _rate(phase: str, think_chars: int, reply_chars: int,
+          began: float, think_end: float, reply_end: float) -> dict:
+    """The rate of the phase currently running, estimated from its characters.
+
+    A live figure cannot be anything else: the provider bills the round when the
+    round is over, and a spinner that says nothing until then is exactly the
+    minute nobody can account for. It is flagged as an estimate the whole way to
+    the screen, and the measured number takes its place as soon as it lands.
+    """
+    from handler import context
+    if phase == "thinking":
+        chars, secs = think_chars, _span(began, think_end)
+    else:
+        chars, secs = reply_chars, _span(think_end or began, reply_end)
+    tokens = context.tokens_for_chars(chars)
+    return {"type": "rate", "phase": phase, "tokens": tokens, "secs": round(secs, 3),
+            "tps": round(tokens / secs, 1) if secs >= 0.2 else 0.0}
 
 def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, settings: dict = None,
              system="", cancelled=None, ask=None, allow: list = None, extra: dict = None,
@@ -234,6 +262,13 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # already includes everything this one added, so keeping the old numbers
         # around would only ever mean reporting a stale round's.
         usage = {}
+        # From asking to the last chunk, tool calls excluded. That is the span a
+        # rate belongs to: a round that spent four minutes in a shell call did
+        # not generate slowly, and dividing by the whole round would say it did.
+        # The wait before the first token is inside it on purpose -- it is time
+        # the user spent watching a spinner, and a rate that hid it would flatter
+        # a reasoning model that thought for a minute and then typed fast.
+        began = time.monotonic()
         # Opening the request is itself a wait -- a reasoning model can sit on
         # the connection for a minute before the first token, and that minute
         # used to be unstoppable. Cancelling here abandons the socket to the
@@ -247,6 +282,17 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         kind, payload = opened
         if kind == "err": raise payload
         stream, first = payload
+        # The two halves of a reply, clocked apart. Thinking's clock starts when
+        # the request was opened -- the silence before the first thought is the
+        # model thinking about thinking, and charging it to the reply would
+        # flatter a model that stalls and then types fast -- and the reply's
+        # starts where the thinking stopped. Between them they account for the
+        # whole round, which is the point: "where did the ninety seconds go" is
+        # the question, and one number for the round cannot answer it.
+        think_chars, reply_chars = 0, 0
+        think_end, reply_end = 0.0, 0.0
+        phase, tick = "", began + RATE_EVERY
+
         # The primed Delta is put back in front. stream itself stays the
         # generator, so a cancel below still has something to close().
         for d in itertools.chain([first] if first is not None else [], stream):
@@ -258,32 +304,50 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
             # different frames, and on anthropic they arrive at opposite ends of
             # the stream.
             usage.update(providers.usage_of(d.raw))
+            now = time.monotonic()
             if d.thinking:
                 yield {"type": "thinking", "text": d.thinking}
                 thinking += d.thinking
+                think_chars, think_end, phase = think_chars + len(d.thinking), now, "thinking"
             if d.content:
                 yield {"type": "content", "text": d.content}
                 content += d.content
+                reply_chars, reply_end, phase = reply_chars + len(d.content), now, "content"
             if d.tool_calls:
                 # Complete calls by contract: providers whose arguments arrive
                 # as JSON fragments assemble them before emitting a Delta.
                 yield {"type": "tool_calls", "text": d.tool_calls}
                 calls.extend(d.tool_calls)
+                reply_end, phase = now, "content"
+            # A rate while it is still happening, estimated from characters
+            # because that is all anyone has until the provider bills the round.
+            # Marked as an estimate all the way out, and replaced by the measured
+            # figure the moment there is one.
+            if phase and now >= tick:
+                tick = now + RATE_EVERY
+                yield _rate(phase, think_chars, reply_chars, began, think_end, reply_end)
         if stop():
             del messages[mark:]
             yield {"type": "cancelled", "messages": messages}
             return
 
         yield {"type": "model", "text": str(last)}
+        # How long the generating took, split the same way the live rate splits
+        # it, and reported with the counts rather than derived from them later:
+        # the text is in hand here, and nowhere downstream sees the clock.
+        spent = {"secs": round(time.monotonic() - began, 3),
+                 "thinking_chars": think_chars, "reply_chars": reply_chars,
+                 "thinking_secs": round(_span(began, think_end), 3),
+                 "reply_secs": round(_span(think_end or began, reply_end), 3)}
         # What the round cost, as soon as it is known rather than at the end of
         # the run: a tool loop can go on for minutes, and a context readout that
         # only moves when the agent stops answering is not a gauge.
-        if usage: yield {"type": "usage", "usage": dict(usage), "model": model}
+        if usage: yield {"type": "usage", "usage": dict(usage), "model": model, **spent}
         messages.append(p.assistant_message(thinking, content, calls))
         yield {"type": "assistant", "thinking": thinking, "content": content, "tool_calls": calls}
 
         if not calls:
-            yield {"type": "done", "messages": messages, "usage": dict(usage)}
+            yield {"type": "done", "messages": messages, "usage": dict(usage), **spent}
             return
 
         parsed = p.parse_calls(calls)
