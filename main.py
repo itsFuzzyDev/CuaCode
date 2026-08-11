@@ -16,6 +16,7 @@ from handler.session import store
 from handler.session.main import Session
 from handler import config, context, environment, usage
 from integrations.memory import loader as memory, naming, recall
+from integrations.instructions import loader as instructions
 
 SETTINGS = config.settings()
 
@@ -341,6 +342,7 @@ while True:
             # Carried over rather than reset: starting a fresh chat is not a
             # request to go back to whatever the provider does by default.
             recall.forget(sess.id)
+            instructions.forget(sess.id)
             # Last round's cost belonged to the conversation that just went.
             LAST_TURN.clear()
             sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
@@ -391,6 +393,9 @@ while True:
                 sess.set_model(now[1])
                 messages = sess.messages()
             text = env.data.get("text", "")
+            # Asked before the record is written, because "is this the opening
+            # message" stops being answerable the moment it is one.
+            opening = not any(r.get("t") == "user" for r in sess.records())
             messages.append({"role": "user", "content": text})
             sess.add_user(text)
             # Where the turn is happening, for anything that scores by it. Set
@@ -408,10 +413,22 @@ while True:
                                     apps=[ctx.get("frontmost_app") or ""])
             except Exception:
                 note = ""
-            if note:
-                sess.add_recall(note)
-                messages[-1]["content"] += "\n\n" + note
-                ipc.reply(env, "token", {"state": "notice", "token": note, "status": "running"})
+            # The same treatment for documentation sitting in the working
+            # directory: names and sizes, never bodies, and at most twice in a
+            # conversation. Separate from recall because the two answer different
+            # questions -- what do I already know about this, versus what does
+            # this repository say about itself -- and a frontend showing them as
+            # one notice would make the second look like a memory hit.
+            try:
+                docs = instructions.docs_block(text, sid=sess.id, path=ctx.get("cwd") or "",
+                                               first=opening)
+            except Exception:
+                docs = ""
+            for extra in (note, docs):
+                if not extra: continue
+                sess.add_recall(extra)
+                messages[-1]["content"] += "\n\n" + extra
+                ipc.reply(env, "token", {"state": "notice", "token": extra, "status": "running"})
             ipc.reply(env, "status", {"type": "chat_received"})
             # Point ctx at whichever session this turn belongs to. Here rather
             # than beside each `sess =` above, because there are three of those
@@ -445,7 +462,19 @@ while True:
                                       # prompt has to describe the machine this turn
                                       # runs on, not the one the conversation started
                                       # on.
-                                      system=[sess.system, environment.block(ctx, SETTINGS, sess)],
+                                      # Three segments now: the instructions that
+                                      # ship with the agent, the user's own
+                                      # standing orders from ~/.cuacode/AGENTS.md,
+                                      # and what is true about this machine. The
+                                      # user's block sits between them because it
+                                      # is stable -- a provider caches the prompt
+                                      # as a prefix, and the environment block
+                                      # carries the clock, so anything placed
+                                      # after it is re-sent every turn anyway.
+                                      # Empty segments are dropped: a blank system
+                                      # block is a 400 on more than one provider.
+                                      system=[s for s in (sess.system, instructions.user_block(),
+                                                          environment.block(ctx, SETTINGS, sess)) if s],
                                       cancelled=ipc.cancelled,
                                       # The event itself, not a reading of it:
                                       # generate() clears it as it consumes it,

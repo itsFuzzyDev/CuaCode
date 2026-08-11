@@ -97,6 +97,7 @@ Everything else the agent keeps lives beside it:
 
 ```
 ~/.cuacode/config.json      providers, keys, models, your permission lists
+~/.cuacode/AGENTS.md        your standing instructions, in every conversation
 ~/.cuacode/sessions/        one directory per conversation
 ~/.cuacode/subagents/*.md   yours; loaded next to the ones that ship
 ~/.cuacode/workflows/*.py
@@ -161,7 +162,7 @@ another. Adding one never touches the others.
 
 `WebFetch` `WebSearch` `agent` `app_list` `app_open` `background`
 `click` `describe_image` `file` `key` `mcp` `mouse_move` `photos`
-`screenshot` `scroll` `shell` `skill` `tasks` `type_text` `wait` `workflow`
+`screenshot` `scroll` `shell` `skill` `todo` `type_text` `wait` `workflow`
 
 The pointer-and-keyboard ones (`click`, `key`, `scroll`, `type_text`,
 `screenshot`, `app_open`, `app_list`) have a per-OS implementation behind one

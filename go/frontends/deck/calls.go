@@ -127,10 +127,15 @@ func formatArgs(name string, m map[string]any) string {
 	case "shell":
 		return clip(text(m, "command"), 120)
 
-	case "tasks":
-		rest := text(m, "task")
-		if rest == "" {
-			rest = strings.TrimSpace(text(m, "id") + " " + text(m, "status"))
+	case "todo":
+		// The steps themselves are the interesting part of a plan and there is
+		// no room for them, so a plan reports how many it holds and everything
+		// else reports which item it touched.
+		rest := ""
+		if n := listLen(m["steps"]); n > 0 {
+			rest = fmt.Sprintf("%d %s", n, plural(n, "step", "steps"))
+		} else if id, ok := number(m, "id"); ok {
+			rest = "#" + fmtNum(id)
 		}
 		return strings.TrimSpace(text(m, "action") + " " + rest)
 
@@ -215,6 +220,20 @@ func resultText(name string, data json.RawMessage) (short, note string, ok bool)
 
 	case "app_list":
 		return fmt.Sprintf("%d apps", listLen(inner["running"])+listLen(inner["installed"])), "", true
+
+	case "todo":
+		// How far through the plan the agent is, which is the one thing about a
+		// todo call worth a row in the feed.
+		if s := text(inner, "summary"); s != "" {
+			// The note column is painted as failure detail, so the step in hand
+			// goes in the result text or nowhere.
+			if cur, is := inner["current"].(map[string]any); is {
+				if t := text(cur, "text"); t != "" {
+					return s + " · " + clip(t, 40), "", true
+				}
+			}
+			return s, "", true
+		}
 
 	case "wait":
 		if v, found := number(inner, "waited"); found {

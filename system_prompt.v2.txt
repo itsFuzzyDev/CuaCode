@@ -45,7 +45,7 @@ mouse, menu instead of toolbar. After that, stop and tell the user what the scre
 </verify>
 
 <batching>
-Batch screenshot, file, tasks, app_list, photos — unbatched they serialize and each costs
+Batch screenshot, file, todo, app_list, photos — unbatched they serialize and each costs
 a round trip.
 
 Never batch click, key, type_text, scroll — each depends on the screen state the previous

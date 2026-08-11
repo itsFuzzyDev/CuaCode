@@ -167,6 +167,34 @@ def _finished_note() -> str:
             "background(action=\"output\", job=\"<id>\") when it is relevant to what you are "
             "doing; ignore it if it is not. This message is from the runtime, not the user.")
 
+# How many rounds a plan may sit untouched before the loop mentions it. Low
+# enough that a forgotten list is caught inside a single detour, high enough that
+# an agent working steadily through one step never sees it: every `todo` call
+# resets the count, so the note only ever reaches an agent that has stopped
+# talking to its own plan.
+TODO_STALE = 4
+
+def _todo_note(ctx) -> str:
+    """One line about a plan nobody has touched in a while, or "".
+
+    The list is worth nothing if the agent forgets it exists, and it has no way
+    to be reminded on its own -- the file is not in the prompt and the tool
+    result that last held it has scrolled past. So the runtime says so, in the
+    same place and the same voice it reports a finished background job: a note
+    about state, not an instruction, and never a reason to fail a round.
+    """
+    try:
+        from tools.todo import state
+        s = state.snapshot(ctx)
+    except Exception:
+        return ""
+    if not s: return ""
+    where = f"in progress: {s['current']}" if s["current"] else f"next: {s['next']}"
+    return (f"[todo] {s['done']}/{s['total']} done, {s['open']} open, {where}\n\n"
+            "You have not touched the list in a while. Update it with the todo tool if you have "
+            "moved on, or clear it if it no longer describes what you are doing. This message is "
+            "from the runtime, not the user.")
+
 def _span(start: float, end: float) -> float:
     """How long a phase lasted, or 0 for one that never happened."""
     return max(end - start, 0.0) if start and end else 0.0
@@ -250,6 +278,10 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
     if extra: reg = {**reg, **extra}
     tools = to_provider(tools=reg, provider=p.name)
     stop = cancelled or (lambda: False)
+    # Rounds since the plan was last spoken to. Counted here rather than in the
+    # tool because the tool only hears about the calls it receives, and the
+    # interesting number is how many rounds went by without one.
+    since_todo = 0
 
     while True:
         # Rollback point for this round. A cancel has to rewind to here: an
@@ -351,6 +383,7 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
             return
 
         parsed = p.parse_calls(calls)
+        since_todo = 0 if any(c.name == "todo" for c in parsed) else since_todo + 1
         results = []
         for call in parsed:
             # Cheap pre-check. The call itself is watched too, from the thread
@@ -425,7 +458,13 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # and the only place one is unambiguously legal for every provider is
         # straight after a tool-result message. Recorded through the same yield
         # the loop records everything else with, so a reload replays it.
-        note = _finished_note()
+        # Both runtime notes go in one message, not two. They land as user
+        # messages, and two of those in a row is a 400 on anthropic -- but the
+        # deeper reason is that they are the same kind of thing to the model:
+        # the runtime saying what changed while it was busy.
+        stale = _todo_note(ctx) if since_todo >= TODO_STALE else ""
+        if stale: since_todo = 0
+        note = "\n\n".join(n for n in (_finished_note(), stale) if n)
         if note:
             messages.append({"role": "user", "content": note})
             yield {"type": "notice", "text": note}

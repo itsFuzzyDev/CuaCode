@@ -1,0 +1,13 @@
+{
+    "properties": {
+        "action": {"type": "string",
+        "enum": ["plan", "add", "start", "done", "drop", "note", "list", "clear"],
+        "description": "plan: write the whole plan, replacing any previous one. add: append steps found mid-work. start: mark one in progress. done / drop: close one. note: record what a step turned up. list: read the whole list. clear: throw it away."},
+        "steps": {"type": "array", "items": {"type": "string"},
+        "description": "The steps, one short imperative line each, in the order you intend to do them (plan, add)"},
+        "id": {"type": "integer",
+        "description": "Which todo (start, done, drop, note)"},
+        "note": {"type": "string",
+        "description": "What this step found, or why it was dropped -- one line, kept on the item so the list still means something later"}},
+    "required": ["action"]
+}

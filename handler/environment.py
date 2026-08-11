@@ -101,6 +101,8 @@ def block(ctx=None, settings: dict = None, session=None) -> str:
         "",
         f"Your own state lives in {home}:",
         "  config.json      providers, API keys, model settings",
+        "  AGENTS.md        the user's standing instructions -- loaded into every",
+        "                   conversation as the <user_instructions> block above",
         "  sessions/        one directory per conversation",
         "  subagents/*.md   subagents the agent tool can run -- write new ones here",
         "  workflows/*.py   scripts the workflow tool runs -- write new ones here",

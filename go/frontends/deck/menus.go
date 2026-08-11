@@ -40,7 +40,6 @@ const (
 var permScopeArg = map[string]string{
 	"shell": "command",
 	"file":  "action",
-	"tasks": "action",
 }
 
 // permScope returns the key a standing allow is filed under and the phrase that

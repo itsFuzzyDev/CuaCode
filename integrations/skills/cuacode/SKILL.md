@@ -45,7 +45,9 @@ them all into `bin/`.
 
 ```
 config.json      providers, API keys (0600), model, params, learned quirks
+AGENTS.md        the user's standing instructions, in every system prompt
 sessions/        one directory per conversation, canonical records
+                 (todo.json, blobs/, screenshots/, notebook/)
 subagents/*.md   subagents the agent tool runs
 workflows/*.py   scripts the workflow tool runs
 skills/<name>/   skills, each with a SKILL.md
@@ -111,6 +113,41 @@ who chose the name — `user > agent > auto > stub` — and nothing weaker may
 overwrite something stronger. The `memory` tool's `rename_session` is the agent's
 door to the same thing. Results land on a queue the main loop drains between
 turns, so meta.json and stdout each keep exactly one writer.
+
+## Instructions and project docs
+
+`integrations/instructions/loader.py`, two things that look alike and are not.
+
+`user_block()` reads `~/.cuacode/AGENTS.md` and returns it as a third system
+segment, between the shipped prompt and the environment block — stable, so the
+provider's prompt cache keeps it, and cached here on the file's mtime so the
+string is byte-identical until the user edits it. Empty segments are dropped in
+`main.py`; a blank system block is a 400 on more than one provider.
+
+`docs_block()` runs beside `recall.block()` on each user message and points at
+documentation in the working directory — `AGENTS.md`, `CLAUDE.md`, `README.md`,
+`.cursorrules` and friends, cwd only, non-recursive. Names and sizes, never
+bodies, and only files the `file` tool has not already read (it reads the same
+`_common.read_files` gate the session restores on reload). Twice per
+conversation at most: once on the opening message, once more only if the
+conversation turns out to be about this project. Recorded as a `recall` record
+like the memory pointers, for the same replay reason.
+
+## The todo list
+
+`tools/todo/` — the agent's plan for the task in front of it, one list per
+conversation in `<session_dir>/todo.json`. `state.py` owns the file and is
+importable on its own, because `generate()` reads a summary from it without
+wanting the tool; `main.py` is the handler. Actions are shaped around the loop:
+`plan` writes the steps before any of them start, `start`/`done`/`drop` move
+one, `note` records what a step found. Every action returns the whole list, so
+the current plan is always in the most recent tool result.
+
+Subagents share the parent's `ctx` and would otherwise write the parent's file,
+so `state.path()` returns None at depth > 0 and the list lives in the process
+instead. `generate()` counts rounds since the last `todo` call and, past
+`TODO_STALE`, injects a one-line reminder through the same message that carries
+finished-background-job notices.
 
 ## MCP
 
