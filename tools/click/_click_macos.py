@@ -6,6 +6,17 @@ _BUTTONS = {
     "middle": (_Q.kCGEventOtherMouseDown, _Q.kCGEventOtherMouseUp, _Q.kCGMouseButtonCenter),
 }
 
+def cursor() -> tuple[int, int]:
+    """Where the pointer actually is, in the same logical points click() takes.
+
+    A posted event carries the cursor with it, so this reads back whether the
+    click landed. CGEventPost does not fail when the process is missing
+    Accessibility permission -- it is dropped -- and a silently discarded click
+    is indistinguishable from a mis-aimed one to the agent.
+    """
+    loc = _Q.CGEventGetLocation(_Q.CGEventCreate(None))
+    return round(loc.x), round(loc.y)
+
 def click(x: int, y: int, button: str = "left", clicks: int = 1):
     down_type, up_type, btn = _BUTTONS[button]
     for i in range(clicks):
