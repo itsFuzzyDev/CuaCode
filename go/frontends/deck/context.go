@@ -460,14 +460,29 @@ func (m *model) renderUsage(b *block) []string {
 	}
 
 	if len(rep.Top) > 0 {
-		rows = append(rows, "", margin+"  "+paint(cInk+bold, "heaviest conversations"))
+		// "by spend", and the rounds and the peak beside it, because the total on
+		// its own is the one number on this page that reliably gets misread. It is
+		// every round's prompt added up, and the prompt goes up again in full each
+		// round -- a conversation that never held more than 25k can have been
+		// charged 472k over 24 of them. Ranked by spend because that is what it
+		// cost; sized by peak because that is how big it got.
+		labelW := max(inner-24, 12)
+		rows = append(rows, "", margin+"  "+trunc(paint(cInk+bold, padTo("heaviest by spend", labelW))+
+			paint(cMuted, padLeft("spend", 8)+padLeft("rounds", 8)+padLeft("peak", 8)), inner))
 		for _, s := range rep.Top {
 			label := s.Title
 			if label == "" {
 				label = s.ID // named a turn or two in; until then the id is the truth
 			}
-			line := paint(cUser, padTo(trunc(label, max(inner-16, 12)), max(inner-16, 12))) +
-				paint(cInk, padLeft(fmtTokens(s.spent()), 8))
+			// A session rolled up before the peak was recorded does not know its
+			// own, and says so rather than reporting a zero it never measured.
+			peak := "–"
+			if s.Peak > 0 {
+				peak = fmtTokens(s.Peak)
+			}
+			line := paint(cUser, padTo(trunc(label, labelW), labelW)) +
+				paint(cInk, padLeft(fmtTokens(s.spent()), 8)) +
+				paint(cGhost, padLeft(fmt.Sprintf("%d", s.Rounds), 8)+padLeft(peak, 8))
 			rows = append(rows, margin+"  "+trunc(line, inner))
 		}
 	}

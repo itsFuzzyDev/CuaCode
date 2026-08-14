@@ -103,7 +103,7 @@ def rollup(days: int = 0, metas: list[dict] = None) -> dict:
     total, models, per_day, sessions = _blank(), defaultdict(_blank), {}, []
     counted, unmeasured = 0, 0
     for meta in metas:
-        u = meta.get("usage") or {}
+        u = _repaired(meta)
         if not u:
             # A session from before this existed, or one whose provider never
             # reported usage. Counted separately rather than silently: "nothing
@@ -145,6 +145,32 @@ def rollup(days: int = 0, metas: list[dict] = None) -> dict:
         "days": [{"day": d, **v} for d, v in sorted(per_day.items())],
         "top": sessions[:8],
     }
+
+
+def _repaired(meta: dict) -> dict:
+    """A session's rollup, brought up to date if it predates part of the shape.
+
+    A rollup written before the peak was recorded has no peak, and no amount of
+    adding those rollups together will produce one -- the number only exists in
+    the records. So a stale meta is recomputed from its own transcript once and
+    written back, and every rollup after that reads the meta like any other.
+    Bounded work: it happens to the sessions that predate the field, once each,
+    and never to a session that has been committed since.
+    """
+    u = meta.get("usage") or {}
+    if not u or not u.get("rounds") or u.get("peak"): return u
+    sid = meta.get("id") or ""
+    try: d = store.path(sid)
+    except ValueError: return u
+    records = store.read_jsonl(d / "messages.jsonl")
+    if not records: return u
+    fresh = of_records(records)
+    # Only when the recompute agrees about what it is recomputing. A transcript
+    # that has been moved or trimmed under its meta is left alone rather than
+    # quietly rewritten to disagree with the number the session reported.
+    if fresh.get("rounds") != u.get("rounds") or not fresh.get("peak"): return u
+    store.write_json(d / "meta.json", {**meta, "usage": fresh})
+    return fresh
 
 
 def _merge(into: dict, u: dict):
@@ -222,12 +248,20 @@ def render(rep: dict) -> str:
             lines.append(f"  {d['day']}  {'█' * max(round(spent / peak * 24), 1):<24}  {_n(spent)}")
 
     if rep["top"]:
-        lines += ["", "heaviest sessions"]
+        # Spend, rounds and peak together. The total alone is the one figure here
+        # that gets misread: it is every round's prompt added up, and the prompt
+        # goes up again in full each round, so a conversation that never held more
+        # than 25k can have been charged 472k over 24 of them.
+        lines += ["", f"  {'heaviest by spend':<21}  {'':<40}  {'spend':>7}  {'rounds':>6}  {'peak':>7}"]
         for s in rep["top"]:
             # A session is named a turn or two in; one showing nothing but its
             # id is telling the truth about itself.
             title = (s["title"] or "")[:40]
-            lines.append(f"  {s['id']}  {title:<40}  {_n(s['in'] + s['out']):>7}")
+            # Unknown for sessions rolled up before the peak was recorded, and an
+            # unknown peak says nothing rather than claiming zero.
+            peak = _n(s["peak"]) if s.get("peak") else "-"
+            lines.append(f"  {s['id']}  {title:<40}  {_n(s['in'] + s['out']):>7}  "
+                         f"{s['rounds']:>6}  {peak:>7}")
 
     return "\n".join(lines)
 
