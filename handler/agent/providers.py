@@ -133,34 +133,44 @@ class CallAssembler:
         return [c for c in (self.close(k) for k in list(self._open)) if c]
 
 class Ollama:
+    """Ollama's hosted catalog, never a local daemon.
+
+    A local daemon is a fine thing to have and the wrong thing to point this
+    at. The agent opens every conversation with ~10k tokens of instructions
+    and environment and carries twenty-odd tool schemas alongside it, which is
+    a size the models anyone runs at home handle badly or not at all: the run
+    does not fail, it just quietly stops following the prompt. So the host is
+    ollama.com, always, and the picker lists what that account can actually
+    reach rather than whatever happens to be on this disk.
+
+    Both ways in work, and neither needs anything set here. An API key pasted
+    into settings (or OLLAMA_API_KEY) is one; the desktop app's `ollama
+    signin` is the other, which writes the same kind of key to ~/.ollama/keys
+    and is read from there when no key was given.
+    """
     name = "ollama"
-    default_model = "minimax-m3:cloud"
-    key_env = "OLLAMA_API_KEY"      # cloud models want one; local daemon does not
-    base_url = None
+    default_model = "minimax-m3"
+    key_env = "OLLAMA_API_KEY"
+    base_url = "https://ollama.com"
     vision = True
 
-    def __init__(self): self._local, self._c, self._host = None, None, ""
+    def __init__(self): self._c, self._host = None, ""
 
     def setup(self, api_key: str | None):
-        if not api_key: return
         # The key is pasted, and ollama's docs show it inside an Authorization
         # header, so it arrives with the scheme attached about as often as
         # not. The client builds `Bearer {key}` itself, and `Bearer Bearer x`
         # is a 401 that reads as a bad key rather than a mangled one.
-        api_key = api_key.strip()
-        if api_key.lower().startswith("bearer "): api_key = api_key[7:].strip()
-        os.environ['OLLAMA_API_KEY'] = api_key
-        # Installed is not running: the binary can sit on disk with nothing
-        # listening behind it, and a daemon can answer with no binary here at
-        # all (docker, or an OLLAMA_HOST pointed somewhere else). Only the
-        # socket settles it, so ask that instead of the filesystem -- nothing
-        # to reach locally means point at the cloud.
-        # Probed once per process: setup() runs every turn, and re-handshaking
-        # with a host that already answered buys nothing.
-        if self._local is None: self._local = _daemon_up(os.environ.get('OLLAMA_HOST'))
-        if not self._local: os.environ['OLLAMA_HOST'] = 'https://ollama.com/'
-        host = os.environ.get('OLLAMA_HOST') or ""
-        if host != self._host: self._host, self._c = host, None
+        key = (api_key or "").strip()
+        if key.lower().startswith("bearer "): key = key[7:].strip()
+        key = key or _signed_in_key()
+        if key: os.environ['OLLAMA_API_KEY'] = key
+        else: os.environ.pop('OLLAMA_API_KEY', None)
+        # Set rather than read: OLLAMA_HOST on this machine points at the local
+        # daemon whenever the app is installed, which is exactly the host this
+        # provider is not for.
+        os.environ['OLLAMA_HOST'] = self.base_url
+        if self.base_url != self._host: self._host, self._c = self.base_url, None
 
     def _client(self):
         """Ours, not the module-level one.
@@ -173,8 +183,13 @@ class Ollama:
         with nothing listening there. Built here instead, after setup() has
         decided, and dropped whenever that decision changes.
         """
-        if self._c is None: self._c = ollama.Client(host=self._host or None)
+        if self._c is None: self._c = ollama.Client(host=self._host or self.base_url)
         return self._c
+
+    def stored_key(self) -> str:
+        """The signed-in account's key, for config to find without being told.
+        See _signed_in_key."""
+        return _signed_in_key()
 
     def stream(self, model: str, messages: list[dict], tools: list, system: str = "", params: dict = None):
         # Ollama takes the system prompt as ordinary leading messages.
@@ -206,11 +221,18 @@ class Ollama:
             stream.close()
 
     def models(self) -> list | None:
-        """Model names this host will answer for, or None if it will not say.
+        """The hosted catalog, or None if it will not say.
 
-        None and [] are different answers: an unreachable daemon has to leave
-        the picker showing what is configured rather than claiming the account
-        has no models.
+        This is ollama.com's /api/tags, not the local daemon's -- the same call
+        `ollama list` makes, asked of the cloud. A local daemon answers the
+        same endpoint with what is on this disk, plus `:cloud` aliases for
+        anything pulled through it, and that mixed list is what the picker used
+        to show. Both suffixed and bare names resolve here, so a config written
+        against the old list keeps working.
+
+        None and [] are different answers: an unreachable host has to leave the
+        picker showing what is configured rather than claiming the account has
+        no models.
         """
         try: return sorted(m.model for m in self._client().list().models)
         except Exception: return None
@@ -721,12 +743,34 @@ def _media_type(b64: str) -> str:
     if b64.startswith("UklGR"): return "image/webp"
     return "image/jpeg"
 
-def _daemon_up(host: str | None, timeout: float = 0.5) -> bool:
-    """Whether anything is listening where ollama would be reached.
+def _signed_in_key() -> str:
+    """The key `ollama signin` left behind, or "".
 
-    OLLAMA_HOST is accepted by ollama in any of `host`, `host:port` or full
-    url form, and is unset for the usual local daemon, so it is normalized to
-    a (host, port) pair first. A TCP connect is all that is checked: the case
+    Signing in through the desktop app is the other half of "have an ollama
+    account", and it never produces a key anyone pastes anywhere: it writes one
+    to ~/.ollama/keys as `name\\tkey` lines. Same bearer token the web console
+    hands out, so reading the first line is all that separates a signed-in
+    machine from one that has to be configured by hand.
+
+    OLLAMA_API_KEY is not consulted here -- the caller has already been given
+    it, through config, before this is reached.
+    """
+    try:
+        for line in open(os.path.expanduser("~/.ollama/keys")):
+            parts = line.strip().split("\t")
+            if len(parts) == 2 and parts[1]: return parts[1]
+    except OSError: pass
+    return ""
+
+def _daemon_up(host: str | None, timeout: float = 0.5) -> bool:
+    """Whether anything is listening at this address.
+
+    For the local servers that speak a dialect over a base_url -- lm studio,
+    llama.cpp, vllm -- where installed is not running and a configured entry
+    with nothing behind it must not be offered as reachable. Any of `host`,
+    `host:port` or a full url, so it is normalized to a (host, port) pair
+    first, and an empty one means the usual ollama port. A TCP connect is all
+    that is checked: the case
     this guards is nothing listening at all, and a real request right after
     reports anything subtler far better than a probe would.
     """
@@ -782,7 +826,7 @@ def get(name: str):
 # Instance state that must not be inherited by a copy, and what it resets to.
 # The client is rebuilt rather than shared because it is cheap to rebuild and
 # the key it was constructed with may not be this run's.
-_FRESH = {"_c": None, "_thinking": [], "_key": "", "_host": "", "_local": None}
+_FRESH = {"_c": None, "_thinking": [], "_key": "", "_host": ""}
 
 def new(name: str):
     """An instance of the same provider that shares nothing mutable.

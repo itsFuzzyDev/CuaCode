@@ -111,7 +111,7 @@ Everything else the agent keeps lives beside it:
 
 | Name | Default endpoint | Key read from |
 | --- | --- | --- |
-| `ollama` | local daemon | `OLLAMA_API_KEY` (only a hosted one needs it) |
+| `ollama` | ollama.com | `OLLAMA_API_KEY`, or `ollama signin` |
 | `anthropic` | api.anthropic.com | `ANTHROPIC_API_KEY` |
 | `openai` | api.openai.com | `OPENAI_API_KEY` |
 | `openrouter` | openrouter.ai | `OPENROUTER_API_KEY` |
@@ -124,6 +124,16 @@ Everything else the agent keeps lives beside it:
 The environment variable wins over the key in `config.json`, so a shell can
 override a stored key without editing anything. Anything OpenAI-compatible is
 one entry in `handler/agent/providers.py`.
+
+`ollama` means ollama.com, not the daemon on your machine, and the model picker
+lists that account's catalog rather than `ollama list`. The agent opens every
+conversation with roughly 10k tokens of instructions and environment and carries
+twenty-odd tool schemas beside it; models small enough to run at home follow
+that badly, and the failure is silent rather than loud. Either way in works and
+neither needs a key in the file: `ollama signin` through the desktop app leaves
+one in `~/.ollama/keys`, which is read when nothing else is set. Point a local
+daemon at it through the `lmstudio` entry (any `host:port`, it is just the
+OpenAI dialect) if you want to try one anyway.
 
 **Vision is the thing that decides what the agent can do.** A model that cannot
 see is never handed the screenshot tools — offered them it would call them, and

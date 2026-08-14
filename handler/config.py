@@ -65,9 +65,17 @@ def settings(cfg: dict = None) -> dict:
 
 def api_key(name: str, cfg: dict = None) -> str:
     """Environment wins over the file, so a shell can override a stored key
-    without editing anything."""
-    key_env = getattr(providers.get(name), "key_env", "")
-    return (os.environ.get(key_env) if key_env else "") or entry(name, cfg).get("api_key") or ""
+    without editing anything.
+
+    Last comes whatever the provider can find on this machine by itself: ollama
+    is signed into through its desktop app, which leaves a usable key in
+    ~/.ollama and means a working account can be configured nowhere at all.
+    Lowest precedence, so pasting a key still overrides the machine's.
+    """
+    p = providers.get(name)
+    key_env = getattr(p, "key_env", "")
+    return ((os.environ.get(key_env) if key_env else "") or entry(name, cfg).get("api_key")
+            or getattr(p, "stored_key", lambda: "")() or "")
 
 # Substrings that mean "this model will not take a picture", as opposed to any
 # of the other things a 400 can mean. Matched loosely because every endpoint
@@ -170,7 +178,8 @@ _probed = {}
 def _reachable(name: str, cfg: dict = None) -> bool:
     """Whether a request to this provider could get anywhere.
 
-    A key settles it. Otherwise the only providers left are the local ones, and
+    A key settles it, and for ollama that includes the one its desktop app
+    leaves behind. Otherwise the only providers left are the local ones, and
     for those "installed" is not "running" -- a base_url pointing at localhost
     with nothing listening behind it would otherwise be offered as the thing
     that can see, and named as such in the prompt, while every call to it fails
@@ -178,7 +187,7 @@ def _reachable(name: str, cfg: dict = None) -> bool:
     """
     if api_key(name, cfg): return True
     url = getattr(providers.get(name), "base_url", "") or ""
-    local = name == "ollama" or "localhost" in url or "127.0.0.1" in url
+    local = "localhost" in url or "127.0.0.1" in url
     if not local: return False
     if name not in _probed:
         _probed[name] = providers._daemon_up(url or None)
