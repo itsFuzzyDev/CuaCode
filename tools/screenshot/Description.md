@@ -14,7 +14,8 @@ require_permissions: False
 Takes a screenshot with a labeled pixel-coordinate grid overlaid.
 Grid lines are labeled with their (x,y) logical pixel position — use
 these labels to determine precise coordinates for click/type actions.
-Coordinates are in logical (not retina/physical) pixels.
+Coordinates are in logical (not retina/physical) pixels, the same unit
+click and mouse_move take. Captures the main display only.
 
 Pass region=[x, y] to zoom into that point before clicking a small
 target: the tool crops around it and magnifies by `zoom` (default 2x)

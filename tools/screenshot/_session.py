@@ -19,7 +19,12 @@ def save_screenshot(img, session_dir, os_name: str, raw: bool) -> str | None:
     try:
         shots_dir = Path(session_dir) / "screenshots"
         shots_dir.mkdir(exist_ok=True, parents=True)
-        dest = shots_dir / f"{active_app_name(os_name)}_{int(time.time())}{'_raw' if raw else ''}.png"
+        # Milliseconds, not seconds. Two captures inside the same second wrote
+        # the same filename and the second silently replaced the first, which
+        # an agent taking a burst of shots does constantly -- and now that the
+        # writes happen on a background thread, two of them can be in flight at
+        # once.
+        dest = shots_dir / f"{active_app_name(os_name)}_{int(time.time() * 1000)}{'_raw' if raw else ''}.png"
         img.save(dest, "PNG")
         return str(dest)
     except Exception:

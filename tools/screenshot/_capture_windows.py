@@ -34,12 +34,26 @@ def capture():
         shot = sct.grab(sct.monitors[1])
         return Image.frombytes("RGB", shot.size, shot.rgb)
 
-def detect_scale(img_w: int) -> tuple[float, int]:
-    try:
-        import ctypes
-        logical_w = ctypes.windll.user32.GetSystemMetrics(0)
-        return img_w / logical_w if logical_w else 1.0, logical_w
-    except Exception:
-        return 1.0, img_w
+def detect_scale(img_w: int, img_h: int) -> tuple[float, int, int]:
+    """Primary monitor size in the units this process sees.
+
+    Both readings are taken after _dpi_aware(), so a DPI-aware process gets
+    physical pixels from GetSystemMetrics and from mss alike -- scale 1.0, and
+    SetCursorPos speaks the same unit. The ratio is still computed rather than
+    assumed, because a failed awareness call flips both to virtualized pixels.
+    Errors are not swallowed: a wrong scale mislabels the grid silently.
+    """
+    import ctypes
+    u = ctypes.windll.user32
+    logical_w, logical_h = int(u.GetSystemMetrics(0)), int(u.GetSystemMetrics(1))
+    if not logical_w or not logical_h:
+        raise RuntimeError("primary monitor reported a zero size; cannot map screenshot pixels to click coordinates")
+    sx, sy = img_w / logical_w, img_h / logical_h
+    if abs(sx - sy) > 0.01:
+        raise RuntimeError(
+            f"screenshot is {img_w}x{img_h} against a {logical_w}x{logical_h} primary monitor, "
+            f"which is not a uniform scale ({sx:.3f} x {sy:.3f}); refusing to guess, "
+            "because clicks would land off target")
+    return sx, logical_w, logical_h
 
 FONT_PATH = "C:\\Windows\\Fonts\\segoeui.ttf"

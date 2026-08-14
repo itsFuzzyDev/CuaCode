@@ -457,7 +457,7 @@ class OpenAI:
         if not images: return {"role": "user", "content": text}
         return {"role": "user", "content": [
             {"type": "text", "text": text},
-            *({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images)]}
+            *({"type": "image_url", "image_url": {"url": f"data:{_media_type(b)};base64,{b}"}} for b in images)]}
 
     def parse_calls(self, native: list) -> list:
         out = []
@@ -499,7 +499,7 @@ class OpenAI:
                 {"note": "images are attached as the next user message, not included here", **meta})})
             out.append({"role": "user", "content": [
                 {"type": "text", "text": f"here are the {len(images)} photo(s) you requested"},
-                *({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images)]})
+                *({"type": "image_url", "image_url": {"url": f"data:{_media_type(b)};base64,{b}"}} for b in images)]})
         return out
 
     def native_calls(self, calls: list[dict]) -> list[dict]:
@@ -616,7 +616,7 @@ class Anthropic:
         if not images: return {"role": "user", "content": text}
         return {"role": "user", "content": [
             {"type": "text", "text": text},
-            *({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+            *({"type": "image", "source": {"type": "base64", "media_type": _media_type(b),
                                            "data": b}} for b in images)]}
 
     def models(self) -> list | None:
@@ -668,7 +668,7 @@ class Anthropic:
             # carries image blocks itself.
             blocks.append({"type": "tool_result", "tool_use_id": call.id, "content": [
                 {"type": "text", "text": json.dumps(meta)},
-                *({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
+                *({"type": "image", "source": {"type": "base64", "media_type": _media_type(b),
                                                "data": b}} for b in images)]})
         return [{"role": "user", "content": blocks}] if blocks else []
 
@@ -706,6 +706,20 @@ def _images(data) -> list:
     img, images = data.get("image_base64"), data.get("images") or []
     if img and not images: images = [img]
     return images
+
+def _media_type(b64: str) -> str:
+    """Read the format off the bytes rather than declaring one.
+
+    It cannot be a constant: screenshot returns PNG and photos returns JPEG,
+    and both were going out labelled jpeg. A label that disagrees with the
+    bytes is rejected outright by some models and quietly mis-decoded by
+    others -- and the tool it breaks is the one the agent sees the screen with.
+    Base64 is deterministic at the front, so the magic bytes show through.
+    """
+    if b64.startswith("iVBORw0KGgo"): return "image/png"
+    if b64.startswith("R0lGOD"): return "image/gif"
+    if b64.startswith("UklGR"): return "image/webp"
+    return "image/jpeg"
 
 def _daemon_up(host: str | None, timeout: float = 0.5) -> bool:
     """Whether anything is listening where ollama would be reached.
