@@ -1,7 +1,7 @@
 import itertools, os, time
 from tools.loader import load_tools, dispatch, refresh_dynamic
 from tools._parser.ToProvider import to_provider
-from handler.agent import effort, interrupt, providers
+from handler.agent import effort, images, interrupt, providers
 from handler.agent.background import JOBS
 
 _tools_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'tools')
@@ -301,6 +301,11 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # the user spent watching a spinner, and a rate that hid it would flatter
         # a reasoning model that thought for a minute and then typed fast.
         began = time.monotonic()
+        # Old screenshots out before the request is built, not after the reply.
+        # This is the single biggest thing between a tool finishing and the next
+        # token arriving: the whole transcript goes back up every round, and a
+        # computer-use transcript is mostly base64. See handler/agent/images.py.
+        images.evict(messages, keep=int(settings.get("keep_images", images.DEFAULT_KEEP)))
         # Opening the request is itself a wait -- a reasoning model can sit on
         # the connection for a minute before the first token, and that minute
         # used to be unstoppable. Cancelling here abandons the socket to the
