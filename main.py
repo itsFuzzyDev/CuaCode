@@ -184,6 +184,9 @@ while True:
             ipc.reply(env, "status", {"terminal": ipc.terminal_info})
             ipc.terminal_info = env.data
             ctx = Ctx(ipc.terminal_info)
+            # The boot session was created before this envelope landed, so its
+            # frontend is stamped here rather than at create().
+            sess.set_frontend(ctx.get("term_program") or "")
             continue
         if env.type != "cmd": continue
         action = env.data.get("action")
@@ -346,7 +349,7 @@ while True:
             # Last round's cost belonged to the conversation that just went.
             LAST_TURN.clear()
             sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
-                                  effort_level=sess.effort)
+                                  effort_level=sess.effort, frontend=ctx.get("term_program") or "")
             messages = sess.messages()
             naming.set_live(sess)
             ipc.reply(env, "status", {"state": "session", "session_id": sess.id,

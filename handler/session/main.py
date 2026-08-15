@@ -27,11 +27,17 @@ class Session:
         self._origin = meta.get("origin") or meta.get("provider") or "ollama"
 
     @classmethod
-    def create(cls, provider: str = "ollama", model: str = "", effort_level: str = "") -> "Session":
+    def create(cls, provider: str = "ollama", model: str = "", effort_level: str = "",
+               frontend: str = "") -> "Session":
         sid = store.new_id()
         now = store.now_iso()
         return cls(sid, {"id": sid, "created": now, "updated": now, "provider": provider,
                          "origin": provider, "model": model, "effort": effort_level,
+                         # Which frontend made this session, so a controller can
+                         # show only the ones it owns and file the rest under
+                         # their own frontend's name. Empty for sessions that
+                         # predate the field.
+                         "frontend": frontend,
                          # title_source says who chose the name, which is what
                          # decides whether anything is allowed to replace it;
                          # title_attempts caps what the auto-namer may spend.
@@ -122,6 +128,14 @@ class Session:
     def set_title(self, title: str, source: str = "auto"):
         self.meta["title"], self.meta["title_source"] = title, source
         if self._records: store.write_json(self.dir / "meta.json", self.meta)
+
+    def set_frontend(self, name: str):
+        """Which frontend owns this session. Stamped from the terminal
+        envelope's term_program, so a controller can tell its own sessions
+        from another frontend's and file the latter under that name."""
+        if name and name != self.meta.get("frontend"):
+            self.meta["frontend"] = name
+            if self._records: store.write_json(self.dir / "meta.json", self.meta)
 
     def set_cwd(self, path: str):
         """Where this conversation is happening. Recorded for recall: matching
