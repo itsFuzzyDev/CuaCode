@@ -160,6 +160,12 @@ def replay(session, env):
                                      "result": r.get("result", {}), "index": tools_seen, "status": "tooling"})
             tools_seen += 1
 
+# Set when a turn is cancelled, spent on the next one. The note says the run was
+# stopped and what survived of it, and it has to travel between turns because
+# there is nowhere legal to put it at the moment it is written: it is a user
+# message, and the user is about to send one of their own.
+pending_note = ""
+
 while True:
     # The frontend that spawned us is gone: its pipe closed (EOF) or we were
     # reparented to launchd (getppid()==1). Either way there is nobody left to
@@ -427,11 +433,17 @@ while True:
                                                first=opening)
             except Exception:
                 docs = ""
-            for extra in (note, docs):
+            # The interrupt note rides the same rail as recall and docs, and for
+            # the same reason: it is runtime text about this user message, so it
+            # is folded into it rather than sent as another. Spent as it is used
+            # -- a turn is only interrupted once, and a note repeated on every
+            # turn after would read as a fresh stop each time.
+            for extra in (pending_note, note, docs):
                 if not extra: continue
                 sess.add_recall(extra)
                 messages[-1]["content"] += "\n\n" + extra
                 ipc.reply(env, "token", {"state": "notice", "token": extra, "status": "running"})
+            pending_note = ""
             ipc.reply(env, "status", {"type": "chat_received"})
             # Point ctx at whichever session this turn belongs to. Here rather
             # than beside each `sess =` above, because there are three of those
@@ -479,6 +491,14 @@ while True:
                                       system=[s for s in (sess.system, instructions.user_block(),
                                                           environment.block(ctx, SETTINGS, sess)) if s],
                                       cancelled=ipc.cancelled,
+                                      # Whatever was typed while this run was
+                                      # going. A callable, not a list: the loop
+                                      # asks at the one point in a round where a
+                                      # user message is legal, and anything that
+                                      # arrives after the last of those is put
+                                      # back on the inbox by end_run and becomes
+                                      # an ordinary next turn.
+                                      steer=ipc.take_steer,
                                       # The event itself, not a reading of it:
                                       # generate() clears it as it consumes it,
                                       # so one press backgrounds one call.
@@ -496,9 +516,20 @@ while True:
                         sess.add_assistant(chunk.get("thinking", ""), chunk.get("content", ""),
                                            chunk.get("tool_calls") or [], usage=round_cost)
                     elif typ == "cancelled":
+                        # No rewind. The loop closed the round off rather than
+                        # abandoning it -- every tool_call it left behind has a
+                        # result saying it was interrupted -- so what is in
+                        # messages is resumable, and the records that describe it
+                        # were yielded on the way here like any other round's.
+                        # Deleting them was what used to leave the model with no
+                        # idea it had been stopped, and no sight of the half-
+                        # finished work the user pressed the key to correct.
                         messages = chunk.get("messages", messages)
-                        sess.rewind()
                         sess.commit()
+                        # Told to the model on its next turn rather than now: the
+                        # note is a user message, and one sent on its own here
+                        # would sit next to the one the user is about to type.
+                        pending_note = chunk.get("note", "")
                         ipc.reply(env, "token", {"state": "cancelled", "token": "cancelled", "status": "cancelled", "msg_count": len(messages)})
                     elif typ == "rate":
                         # No "status" key: this says how fast, not what state
@@ -539,12 +570,18 @@ while True:
                         ipc.reply(env, "token", {"state": "background", "token": job.get("job", ""),
                                                  "result": job, "status": "tooling"})
                     elif typ == "notice":
-                        # Runtime text put into the conversation, not something
-                        # the user typed. Recorded as a user record all the same:
-                        # that is the role it occupies in the history, and a
+                        # Runtime text put into the conversation, and -- since
+                        # mid-turn messages land here too -- sometimes the user's
+                        # own words with it. Recorded as a user record either
+                        # way: that is the role it occupies in the history, and a
                         # record that lied about it would replay wrong.
                         sess.add_user(chunk.get("text", ""))
-                        ipc.reply(env, "token", {"state": "notice", "token": chunk.get("text", ""), "status": "running"})
+                        # Only the runtime half goes to the frontend. It drew the
+                        # user's line when they typed it, and a notice repeating
+                        # it would put the same sentence on screen twice.
+                        shown = chunk.get("show", chunk.get("text", ""))
+                        if shown:
+                            ipc.reply(env, "token", {"state": "notice", "token": shown, "status": "running"})
                     elif typ == "tool_output":
                         result = chunk.get("result", {})
                         name = chunk.get("name")
@@ -594,4 +631,9 @@ while True:
                 sess.rewind()
                 sess.commit()
                 ipc.reply(env, "token", {"state": "error", "token": str(e), "status": "error"})
+            finally:
+                # The turn is over however it ended. Anything typed during it
+                # that the loop never reached goes back on the inbox here and is
+                # answered as an ordinary next message -- queued, not swallowed.
+                ipc.end_run()
     time.sleep(0.001)

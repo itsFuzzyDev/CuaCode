@@ -30,6 +30,15 @@ class IPC:
         # The main loop checks it so a dead frontend cannot leave an orphan
         # worker polling an empty inbox forever.
         self._eof = threading.Event()
+        # True for exactly as long as a turn is running. It is what tells a
+        # chat envelope whether it is the next message or a mid-turn one, and
+        # nothing else reads it.
+        self._running = threading.Event()
+        # Messages typed while a turn was in flight, oldest first. Envelopes
+        # rather than strings: one that is never spoken into the round has to
+        # go back to the inbox intact and become an ordinary turn.
+        self._steer: list[Envelope] = []
+        self._steer_lock = threading.Lock()
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
@@ -52,6 +61,22 @@ class IPC:
                 # generate() for the whole run, so anything meant to reach a
                 # call already in flight has to be flagged from out here.
                 elif action == "background": self.background.set()
+                # A message typed while the turn is still going. Held out here
+                # for the same reason, and -- unlike cancel -- deliberately not
+                # queued: the main loop would read it after the run and answer
+                # it as a second turn, which is the behaviour this replaces. The
+                # loop drains it between tool calls instead and speaks it into
+                # the round that is already happening. Anything still unspoken
+                # when the run ends is put back on the inbox by end_run, so a
+                # message is delayed at worst and never dropped.
+                elif action == "chat" and self._running.is_set():
+                    with self._steer_lock: self._steer.append(env)
+                    # Shaped like chat_received and for the same purpose -- an
+                    # acknowledgement, not a state. A `state` field here would
+                    # be folded into the snapshot and move a frontend off
+                    # whatever the run is actually doing.
+                    self.send("status", {"type": "chat_queued"}, id_=env.id)
+                    continue
 
                 # If someone is waiting for this id via call(), hand it to them.
                 # Otherwise queue it for normal polling.
@@ -73,6 +98,33 @@ class IPC:
         run. A background press with nothing running was aimed at nothing."""
         self._cancel.clear()
         self.background.clear()
+        # Last, and only after the two clears: the flag is what makes the
+        # reader hold chat envelopes back, and holding one back before the run
+        # it belongs to has started would strand it for a whole turn.
+        self._running.set()
+
+    def end_run(self):
+        """Close the turn and hand back whatever was typed during it.
+
+        Anything the loop never got to -- a message that arrived after the last
+        tool call, or during a round that had none -- goes on the inbox now and
+        is answered as an ordinary next turn. This is the only path off the
+        steer list other than take_steer, which is what makes "queued" a delay
+        rather than a place messages go to die. Safe to call twice.
+        """
+        self._running.clear()
+        with self._steer_lock: left, self._steer = self._steer, []
+        for env in left: self.inbox.put(env)
+
+    def take_steer(self) -> list[str]:
+        """Everything typed since the last drain, oldest first, and clear.
+
+        Handed to generate() as a callable so the loop can ask at the one place
+        a user message is legal for every provider -- straight after a round's
+        tool results -- rather than the loop being interrupted from outside.
+        """
+        with self._steer_lock: got, self._steer = self._steer, []
+        return [t for t in ((e.data or {}).get("text") or "" for e in got) if t.strip()]
 
     def cancelled(self) -> bool:
         """True once a cancel has arrived for the run in flight."""

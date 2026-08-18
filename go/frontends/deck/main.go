@@ -243,9 +243,23 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Quit
 }
 
+// send puts a message on the wire and echoes it into the feed.
+//
+// Typed while a run is going it is a mid-turn message, not the next turn: the
+// worker holds it back and speaks it into the round already in flight, after
+// the tool results, which is the only place a user message is legal for every
+// provider. Everything below the echo is skipped in that case — the run it
+// would start is the one already running, and resetting its clock or reopening
+// its call group would report the wrong thing about it.
 func (m *model) send(text string) tea.Cmd {
 	m.sess.SendChat(text)
 	m.status = m.sess.Snapshot()
+
+	if m.running {
+		m.push(&block{kind: kUser, text: text})
+		m.rebuild()
+		return nil
+	}
 
 	m.closeCalls()
 	m.callCount, m.callFail = 0, 0

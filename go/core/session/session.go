@@ -116,12 +116,20 @@ func (s *Session) SendChat(text string) (string, error) {
 	s.msgSeq++
 	id := fmt.Sprintf("msg-%d", s.msgSeq)
 	s.snap.Msgs++
-	s.snap.State = Running
-	// The rate belonged to the round that just ended. Cleared rather than left
-	// standing: a figure from the last answer, sitting next to a spinner for the
-	// next one, reads as this round's and is not.
-	s.snap.Phase, s.snap.TPS, s.snap.ThinkTPS, s.snap.ReplyTPS = "", 0, 0, 0
-	s.snap.OutTokens, s.snap.ThinkTokens, s.snap.ReplyTokens = 0, 0, 0
+	// Only when this message starts a run. Sent into one already going it is a
+	// mid-turn message — the worker holds it and speaks it into the round in
+	// flight — and the readouts belong to that round, which has not ended.
+	// Clearing them there would blank a live rate every time the user typed.
+	if s.snap.State != Running && s.snap.State != Tools {
+		// The rate belonged to the round that just ended. Cleared rather than left
+		// standing: a figure from the last answer, sitting next to a spinner for the
+		// next one, reads as this round's and is not.
+		s.snap.Phase, s.snap.TPS, s.snap.ThinkTPS, s.snap.ReplyTPS = "", 0, 0, 0
+		s.snap.OutTokens, s.snap.ThinkTokens, s.snap.ReplyTokens = 0, 0, 0
+		// Left alone otherwise, Tools included: a message typed while a tool is
+		// running does not stop it being what the run is doing.
+		s.snap.State = Running
+	}
 	w := s.worker
 	s.mu.Unlock()
 
