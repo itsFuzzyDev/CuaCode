@@ -152,6 +152,39 @@ func TestPermissionQueue(t *testing.T) {
 	}
 }
 
+// TestSkillPalette covers the other half of the palette: skills the worker
+// listed, which open a message rather than running a command.
+func TestSkillPalette(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 80, 24
+	m.takeSkills(json.RawMessage(`{"skills":[{"name":"unslop","description":"Cut AI tells from any writing. Must always apply."}]}`))
+	if len(m.skills) != 1 || m.skills[0].help != "Cut AI tells from any writing" {
+		t.Fatalf("skill row is %+v", m.skills)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "unsl" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	opt, ok := m.ov.selected()
+	if !ok || opt.value != skillPrefix+"unslop" {
+		t.Fatalf("filter %q selected %q, want the skill", m.ov.filter, opt.value)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.overlayActive() {
+		t.Error("palette still open after choosing a skill")
+	}
+	// The name stays put: a skill is the opening of a message, not a command
+	// that has already run.
+	if got := string(m.input); got != "/unslop " {
+		t.Errorf("input is %q, want %q", got, "/unslop ")
+	}
+	if m.cursor != len(m.input) {
+		t.Errorf("cursor at %d, want %d", m.cursor, len(m.input))
+	}
+}
+
 // TestSlashCommands drives the palette the way a user does: type, filter, pick.
 func TestSlashCommands(t *testing.T) {
 	m := initialModel()

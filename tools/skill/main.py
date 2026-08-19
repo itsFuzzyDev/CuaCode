@@ -6,7 +6,9 @@ skill written during this conversation is loadable in the next breath.
 from integrations.skills import loader as skills
 
 def _installed() -> dict:
-    try: return skills.load_skills()
+    # scope="model": a skill marked `disable-model-invocation` is the user's to
+    # reach for with /<name>, and is not offered here at all.
+    try: return skills.load_skills(scope="model")
     except Exception: return {}
 
 def describe(body: str) -> str:
@@ -24,7 +26,7 @@ def schema() -> dict:
     return {"properties": {"skill": which}, "required": ["skill"]}
 
 def run(args: dict, ctx) -> dict:
-    try: s = skills.get(args["skill"])
+    try: s = skills.get(args["skill"], scope="model")
     except ValueError as e: return {"error": str(e)}
     out = {"name": s.name, "instructions": s.body, "dir": str(s.path)}
     if s.files: out["files"] = s.files

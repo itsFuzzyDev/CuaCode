@@ -104,6 +104,19 @@ Only the name and description are in context by default; the body is read when
 the agent loads it. So fifty skills cost fifty lines, not fifty documents, and
 the description is the part that decides whether a skill is ever used.
 
+Two things can load it: the agent, through the `skill` tool, and the user,
+by typing `/<name>` — the palette lists every skill under the built-in
+commands, and the instructions ride along with that message. Frontmatter can
+close either door:
+
+```markdown
+disable-model-invocation: true   # not offered to the agent; /<name> only
+disable-user-invocation: true    # not in the palette; the agent's to reach for
+```
+
+Both default to false. Setting both would leave a skill nothing can load, so
+that folder is dropped rather than listed as installed.
+
 Other files in the folder — scripts, templates, reference tables — are listed
 on load but not read. The body points at what to read and when; the agent gets
 the folder's absolute path back and reads or runs them itself. A deterministic

@@ -290,10 +290,45 @@ func center(s string, visible, w int) string {
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", pad-left)
 }
 
+// skillPrefix marks a palette row as a skill rather than a built-in command.
+// A skill is not run on the spot: choosing one writes "/name " into the input
+// so the task can be typed after it, and the worker loads the instructions
+// beside that message when it is sent.
+const skillPrefix = "skill:"
+
+// takeSkills reads the worker's listing of what a user may invoke by name.
+// Skills marked `disable-user-invocation` never arrive here at all.
+func (m *model) takeSkills(data json.RawMessage) {
+	var reply struct {
+		Skills []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"skills"`
+	}
+	if json.Unmarshal(data, &reply) != nil {
+		return
+	}
+	m.skills = m.skills[:0]
+	for _, s := range reply.Skills {
+		// One line, and only the first sentence of it: a description written
+		// for a model to decide on is a paragraph, and the palette has a row.
+		help := s.Description
+		if i := strings.IndexAny(help, ".\n"); i > 0 {
+			help = help[:i]
+		}
+		m.skills = append(m.skills, command{s.Name, help})
+	}
+}
+
 func (m *model) openCommands(anchor int) {
-	opts := make([]option, 0, len(commands))
+	opts := make([]option, 0, len(commands)+len(m.skills))
 	for _, c := range commands {
 		opts = append(opts, option{label: "/" + c.name, hint: c.help, value: c.name})
+	}
+	// Skills after the built-ins, dimmed: they are the same gesture, but what
+	// they do is load instructions rather than work the UI.
+	for _, c := range m.skills {
+		opts = append(opts, option{label: "/" + c.name, hint: c.help, value: skillPrefix + c.name, tone: cMuted})
 	}
 	m.openOverlay(ovCommands, "command", opts, anchor)
 }

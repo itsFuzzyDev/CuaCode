@@ -477,6 +477,15 @@ func (m *model) chooseMenu() {
 		m.closeOverlay()
 
 	case ovCommands:
+		// A skill is not a command: it is the opening of a message. The name
+		// stays in the input so the task can be typed after it, and the worker
+		// loads the instructions beside that message when it is sent.
+		if name, ok := strings.CutPrefix(opt.value, skillPrefix); ok {
+			m.input, m.cursor = []rune("/"+name+" "), 0
+			m.cursor = len(m.input)
+			m.closeOverlay()
+			return
+		}
 		// The command is the whole message, so the line goes with the menu.
 		m.input, m.cursor = m.input[:0], 0
 		m.closeOverlay()

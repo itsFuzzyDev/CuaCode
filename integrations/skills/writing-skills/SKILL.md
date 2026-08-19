@@ -25,6 +25,24 @@ A description that says "helps with deployment" never gets loaded at the right
 moment. One that says "Use before pushing to production; covers the staging
 gate and the rollback command" does.
 
+## Who may load it
+
+Two things can: you, through the skill tool, and the user, by typing `/<name>`
+— the palette lists every skill under the built-in commands, and the body is
+attached to the message they send. Both are allowed unless the frontmatter says
+otherwise:
+
+```markdown
+disable-model-invocation: true   # the user's to invoke; never offered to you
+disable-user-invocation: true    # yours to reach for; never in the palette
+```
+
+Write neither unless there is a reason. Model-only fits a skill that is only
+ever right in the middle of a job the user is not thinking about; user-only
+fits one that is a command in all but name — a report, a mode, a format the
+user asks for by name. Setting both leaves a skill nothing can load, and the
+loader drops such a folder rather than listing it.
+
 ## Files next to it
 
 Anything else in the folder is listed when the skill is loaded, but not read.

@@ -179,7 +179,9 @@ def _counts(cwd: str, app: str) -> dict:
     from integrations.subagents import loader as subagents
 
     return {
-        "skills": _count(lambda: len(skills.load_skills())),
+        # scope="model": what the window actually holds is the skill tool's
+        # index, and a skill the user alone may invoke is not in it.
+        "skills": _count(lambda: len(skills.load_skills(scope="model"))),
         "memory": _count(lambda: len(memory.in_scope(path=cwd, apps=[app] if app else None))),
         "mcp": _count(lambda: len(mcp.load_servers())),
         "subagents": _count(lambda: len(subagents.load_agents())),

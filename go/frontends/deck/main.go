@@ -63,6 +63,7 @@ type model struct {
 	provider      string            // who is answering, for the status bar
 	modelID       string            // ...and on which model
 	files         []option          // cached working-directory listing for @
+	skills        []command         // user-invocable skills, as extra palette rows
 	filesCut      bool              // ...and whether the walk stopped early
 	effort        string            // the thinking level this conversation is set to
 	ultra         bool              // ultracode: on only by typing its name
@@ -578,6 +579,10 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 				m.probing = true
 				m.command("provider.list", nil)
 			}
+			// Skills are files on disk and one may have been written since the
+			// last read, so the palette asks again whenever the worker comes
+			// up rather than only once.
+			m.command("skill.list", nil)
 		}
 
 		switch ev.Parsed.Type {
@@ -589,6 +594,12 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 			m.openSessions(ev.Parsed.Data)
 			m.rebuild()
 			return nil
+		case "skills":
+			// Nothing opens: the rows join the slash palette for the next time
+			// it is opened.
+			m.takeSkills(ev.Parsed.Data)
+			return nil
+
 		case "providers":
 			m.openProviders(ev.Parsed.Data)
 
