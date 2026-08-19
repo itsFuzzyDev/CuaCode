@@ -34,7 +34,9 @@ def _ax():
     if _AX is None:
         try:
             from types import SimpleNamespace
-            import AppKit, Quartz
+            import Quartz
+            from tools._appkit import appkit
+            AppKit = appkit()
             from ApplicationServices import (
                 AXUIElementCreateApplication, AXUIElementCopyAttributeValue,
                 AXUIElementSetAttributeValue, AXValueCreate, AXValueGetValue,

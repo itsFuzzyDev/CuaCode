@@ -10,8 +10,8 @@ def active_app_name() -> str:
     pyobjc is not importable.
     """
     try:
-        import AppKit
-        name = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()
+        from tools._appkit import appkit
+        name = appkit().NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()
         if name: return name.replace(" ", "_")
     except Exception:
         pass

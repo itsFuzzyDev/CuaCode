@@ -212,7 +212,7 @@ draws that one.
 (`session.list`, `session.new`, `session.load`, `session.delete`,
 `session.effort`, `provider.list`, `provider.use`, `provider.set`,
 `model.list`, `vision.use`, `permission.mode`, `tool.detail`,
-`background.list`, `background.kill`); the reply arrives through the same event
+`background.list`, `background.kill`, `skill.list`); the reply arrives through the same event
 callback, matched by the envelope ID.
 
 `build.sh` and `run.sh` (and their `.ps1` twins) pick up the new directory
@@ -373,10 +373,16 @@ name collision goes to yours.
 | --- | --- | --- | --- |
 | subagent | `integrations/subagents/*.md` | `~/.cuacode/subagents/` | one model run with its own prompt, tools and output schema |
 | workflow | `integrations/workflows/*.py` | `~/.cuacode/workflows/` | a script running several of them in a fixed order |
-| skill | `integrations/skills/<name>/` | `~/.cuacode/skills/<name>/` | instructions loaded only when needed |
+| skill | `integrations/skills/<name>/` | `~/.cuacode/skills/<name>/` | instructions loaded only when needed, by the agent or by `/<name>` |
 | MCP server | `integrations/mcp/servers.json` | `~/.cuacode/mcp/servers.json` | tools this codebase did not write |
 
 `integrations/README.md` has the formats. Nothing MCP is registered by default.
+
+A skill is loadable two ways: the agent calls the `skill` tool, or you type
+`/<name>` in the palette and the instructions ride along with that message. Its
+frontmatter can close either door — `disable-model-invocation: true` keeps it
+out of the tool's list, `disable-user-invocation: true` keeps it out of the
+palette. Setting both leaves a skill nothing can load, so it is dropped.
 
 ### Adding a tool
 

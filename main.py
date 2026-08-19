@@ -17,6 +17,7 @@ from handler.session.main import Session
 from handler import config, context, environment, usage
 from integrations.memory import loader as memory, naming, recall
 from integrations.instructions import loader as instructions
+from integrations.skills import loader as skills
 
 SETTINGS = config.settings()
 
@@ -275,6 +276,15 @@ while True:
             rep["session"] = {"id": sess.id, **(usage.of_records(sess.records()) or {})}
             ipc.reply(env, "usage", rep)
 
+        elif action == "skill.list":
+            # The palette's half of skills. Only the ones a user may invoke:
+            # a skill marked `disable-user-invocation` is the model's to reach
+            # for, and never appears as a /command.
+            try:
+                ipc.reply(env, "skills", {"skills": skills.listing("user")})
+            except Exception as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+
         elif action == "session.list":
             ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})
         elif action == "provider.list":
@@ -450,12 +460,20 @@ while True:
                                                first=opening)
             except Exception:
                 docs = ""
+            # A message that opens with /<skill> loads that skill's instructions.
+            # Same rail again: the user's line stays the line they typed, and
+            # the body rides beside it rather than replacing it -- so a skill
+            # invoked by hand reads back as what it was.
+            try:
+                skill_block = skills.invocation(text)
+            except Exception:
+                skill_block = ""
             # The interrupt note rides the same rail as recall and docs, and for
             # the same reason: it is runtime text about this user message, so it
             # is folded into it rather than sent as another. Spent as it is used
             # -- a turn is only interrupted once, and a note repeated on every
             # turn after would read as a fresh stop each time.
-            for extra in (pending_note, note, docs):
+            for extra in (pending_note, note, docs, skill_block):
                 if not extra: continue
                 sess.add_recall(extra)
                 messages[-1]["content"] += "\n\n" + extra
