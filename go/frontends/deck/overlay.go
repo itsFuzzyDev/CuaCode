@@ -63,7 +63,16 @@ type overlay struct {
 	anchor int    // rune index in the input where the trigger sits
 
 	perm     permRequest
-	expanded bool // the permission prompt is showing every argument row it has
+	expanded bool // the permission prompt is using every row the screen can spare
+	bodyAt   int  // first row of the call's body on screen, for scrolling it
+	bodyMax  int  // ...and how far it can be scrolled, as of the last draw
+
+	// The body, rendered. Cached because it is rebuilt on every frame otherwise
+	// — twice, once to measure and once to draw — and parsing a thousand-line
+	// patch twenty times a second to show ten of its rows is work nobody asked
+	// for.
+	body  []string
+	bodyW int
 }
 
 // maxRows caps how tall a menu gets, so a long list never eats the feed.
@@ -248,39 +257,95 @@ func (m *model) renderOverlay() []string {
 func (m *model) permBodyRows(o *overlay, width int) []string {
 	p := &o.perm
 
-	var rows []string
+	// The summary is one line and it says which file and what kind of change,
+	// so it stays put while the block under it scrolls. Losing "edit main.go"
+	// off the top on the way to line 200 of the patch is losing the sentence
+	// the patch is an answer to.
+	var head []string
 	if p.summary != "" {
-		rows = append(rows, margin+"  "+paint(cMuted, trunc(plain(p.summary), width-2)))
+		head = append(head, margin+"  "+paint(cMuted, trunc(plain(p.summary), width-2)))
 	}
 
-	switch {
-	case p.diff != "":
-		rows = append(rows, diffRows(p.diff, p.lang, width)...)
-	case p.content != "":
-		rows = append(rows, contentRows(p.content, p.lang, width)...)
-	case len(p.full) > 0 && p.summary == "":
-		rows = append(rows, valueRows(p.full, width, 0)...)
-	}
+	rows := m.permBody(o, width)
 
-	// Title, the blank under the block, three choices, the trailing blank, the
-	// input row and the two the frame always takes.
-	const chrome = 8
-	budget := max(m.height-chrome, 1)
+	// Everything on screen that is not the block: the title, the blank under
+	// it, three choices, the trailing blank, the input row and the two the
+	// frame always takes — and the summary, which is counted separately
+	// because a call without one does not have it.
+	const chrome = 9
+	budget := max(m.height-chrome-len(head), 1)
 	if !o.expanded {
 		budget = min(budget, permBodyRowsShown)
 	}
 	if len(rows) <= budget {
-		return rows
+		o.bodyAt, o.bodyMax = 0, 0
+		return append(head, rows...)
 	}
 
-	cut := rows[:max(budget-1, 1)]
-	more := plural(len(rows)-len(cut), "more line", "more lines")
-	return append(cut, margin+"  "+paint(cGhost, "… "+more+"  ·  ctrl+o to see them"))
+	// One row of the budget goes to the footer, which says where in the block
+	// the window is: a view of ten lines out of four hundred that does not say
+	// so is indistinguishable from the whole thing.
+	window := max(budget-1, 1)
+	o.bodyMax = len(rows) - window
+	o.bodyAt = min(max(o.bodyAt, 0), o.bodyMax)
+
+	out := append(head, rows[o.bodyAt:o.bodyAt+window]...)
+	return append(out, margin+"  "+paint(cGhost, o.bodyFoot(window, len(rows))))
 }
 
-// permBodyRowsShown is how much of a call the prompt shows before it starts
-// asking to be opened. Enough for a small hunk or every argument of an ordinary
-// call, short enough that the choices stay where the eye expects them.
+// permBody renders what the call would do, without deciding how much of it
+// fits. Cached against the width it was drawn at.
+func (m *model) permBody(o *overlay, width int) []string {
+	if o.body != nil && o.bodyW == width {
+		return o.body
+	}
+	p := &o.perm
+
+	var rows []string
+	switch {
+	case p.diff != "":
+		rows = diffRows(p.diff, p.lang, width)
+	case p.content != "":
+		rows = contentRows(p.content, p.lang, width)
+	case len(p.full) > 0 && p.summary == "":
+		rows = valueRows(p.full, width, 0, p.lang)
+	}
+	if rows == nil {
+		rows = []string{}
+	}
+	o.body, o.bodyW = rows, width
+	return rows
+}
+
+// bodyFoot is the line under a block too long to show whole: where you are in
+// it, and the keys that move you.
+func (o *overlay) bodyFoot(window, total int) string {
+	pos := itoa(o.bodyAt+1) + "–" + itoa(o.bodyAt+window) + " of " + itoa(total)
+	size := "ctrl+o taller"
+	if o.expanded {
+		size = "ctrl+o smaller"
+	}
+	return pos + sep + "shift+↑↓ scroll" + sep + size
+}
+
+// scrollBody moves the window over the call's body. The choices keep the plain
+// arrows — the prompt is a question first — so the block gets the modified
+// ones, and the page keys, which nothing else on a permission prompt wants.
+func (o *overlay) scrollBody(n int) {
+	o.bodyAt = min(max(o.bodyAt+n, 0), o.bodyMax)
+}
+
+// scrollPermBody is the same thing from a keypress, which can arrive before the
+// prompt has ever been drawn. How far there is to scroll is a drawing decision,
+// so the drawing is asked for first — it is cached, so asking costs nothing.
+func (m *model) scrollPermBody(n int) {
+	m.permBodyRows(&m.ov, m.bodyW())
+	m.ov.scrollBody(n)
+}
+
+// permBodyRowsShown is how much of a call the prompt shows before the rest of
+// it has to be scrolled to. Enough for a small hunk or every argument of an
+// ordinary call, short enough that the choices stay where the eye expects them.
 const permBodyRowsShown = 10
 
 // hint is the right-hand key legend, which differs per menu because the
@@ -300,10 +365,38 @@ func (o *overlay) hint() string {
 // every way out of it is an answer.
 func (m *model) handleOverlayKey(msg tea.KeyPressMsg, ctrl, alt bool) {
 	if m.ov.kind == ovPermission {
-		// Opening the arguments is not an answer, so it is handled ahead of the
-		// keys that are: nothing here may resolve the prompt by accident.
+		// Reading the call is not answering it, so every key that only moves
+		// the block is handled ahead of the ones that resolve the prompt:
+		// nothing here may say yes by accident.
 		if msg.Code == 'o' && ctrl {
 			m.ov.expanded = !m.ov.expanded
+			return
+		}
+		// Shift on the arrows, because the bare ones belong to the choices.
+		// Alt does the same thing, for the terminals that report one modifier
+		// on an arrow key and not the other.
+		if shift := msg.Mod&tea.ModShift != 0; shift || alt {
+			switch msg.Code {
+			case tea.KeyUp:
+				m.scrollPermBody(-1)
+				return
+			case tea.KeyDown:
+				m.scrollPermBody(1)
+				return
+			}
+		}
+		switch msg.Code {
+		case tea.KeyPgUp:
+			m.scrollPermBody(-permBodyRowsShown)
+			return
+		case tea.KeyPgDown:
+			m.scrollPermBody(permBodyRowsShown)
+			return
+		case tea.KeyHome:
+			m.scrollPermBody(-1 << 30)
+			return
+		case tea.KeyEnd:
+			m.scrollPermBody(1 << 30)
 			return
 		}
 		switch msg.Code {

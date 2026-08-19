@@ -767,7 +767,7 @@ func (m *model) argRows(a act) []string {
 		// Arguments that would not decode are still what was sent.
 		return blockRows(plain(a.args), width, 1)
 	}
-	return valueRows(args, width, 0)
+	return valueRows(args, width, 0, langOf(text(args, "path")))
 }
 
 // nameCol is the width of the tool-name column. Every call in the toolbox fits

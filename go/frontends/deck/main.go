@@ -649,6 +649,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.quit()
 
 	case tea.MouseWheelMsg:
+		// A permission prompt owns the wheel while it is up: the block it is
+		// asking about is the only thing on screen worth scrolling, and the
+		// feed behind it is not going anywhere.
+		if m.ov.kind == ovPermission {
+			switch msg.Button {
+			case tea.MouseWheelUp:
+				m.scrollPermBody(-wheelRows)
+			case tea.MouseWheelDown:
+				m.scrollPermBody(wheelRows)
+			}
+			return m, nil
+		}
+
 		// Up is always back towards the start of what is on screen, which is a
 		// different direction in the two of them: the feed is anchored to its
 		// end and the inspector to its beginning.

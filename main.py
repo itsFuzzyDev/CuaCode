@@ -129,6 +129,21 @@ def tool_detail(session, index: int) -> dict:
     return {"index": index, "total": len(results), "name": rec.get("name", ""), "ts": rec.get("ts", ""),
             "args": _shrink(call.get("args") or {}), "result": _shrink(rec.get("result") or {})}
 
+def _detail_now(env):
+    """Answer tool.detail off the reader thread, so a call can be read while the
+    run that made it is still going.
+
+    The main loop is inside generate() for a whole turn: an envelope queued for
+    it is answered when the turn ends, which for "what did that call return" is
+    an hour after it was useful. This only reads -- records(), and a copy of a
+    payload -- so it is safe to run beside the run appending to them.
+    """
+    try: want = int((env.data or {}).get("index", -1))
+    except (TypeError, ValueError): want = -1
+    ipc.reply(env, "detail", tool_detail(sess, want))
+
+ipc.direct["tool.detail"] = _detail_now
+
 def replay(session, env):
     """Re-send a reopened conversation as the same events the live run sent.
 
@@ -230,7 +245,9 @@ while True:
             # The other half of the summarising above: the wire carries a size
             # where a result was, and this is how a frontend gets the thing
             # itself -- asked for, one call at a time, never streamed at
-            # everyone by default.
+            # everyone by default. Normally answered on the reader thread by
+            # _detail_now and never seen here; this is what catches one that
+            # arrived before that was registered.
             try: want = int(env.data.get("index", -1))
             except (TypeError, ValueError): want = -1
             ipc.reply(env, "detail", tool_detail(sess, want))

@@ -431,3 +431,52 @@ func contentRows(content, lang string, width int) []string {
 	}
 	return rows
 }
+
+// codeRows draws a file's own text as code: a line-number gutter, the syntax
+// coloured, and no patch markers, because nothing here is changing. It is what
+// a read comes back as, and what the halves of an edit are shown as.
+//
+// A read hands its lines back numbered — "12\tfunc main() {" — because the
+// model needs the numbers to edit by them. Those numbers are the gutter here
+// rather than the first word of the code; text with none is numbered from one.
+func codeRows(content, lang string, width int) []string {
+	lines := strings.Split(strings.TrimRight(content, "\n"), "\n")
+	rows := make([]string, 0, len(lines))
+
+	for i, raw := range lines {
+		no, text := i+1, raw
+		if n, body, is := numberedLine(raw); is {
+			no, text = n, body
+		}
+		gutter := paint(cGhost, padLeft(shortNum(no), numCol)) + paint(cRule, " │ ")
+		code := renderSpans(truncSpans(highlight(plain(text), lang), max(width-numCol-6, 8)), cInk)
+		rows = append(rows, margin+"  "+gutter+code)
+	}
+	return rows
+}
+
+// numberedLine splits a read's "<n>\t<text>" line into the two.
+func numberedLine(line string) (int, string, bool) {
+	tab := strings.IndexByte(line, '\t')
+	if tab <= 0 {
+		return 0, line, false
+	}
+	n, err := strconv.Atoi(line[:tab])
+	if err != nil || n <= 0 {
+		return 0, line, false
+	}
+	return n, line[tab+1:], true
+}
+
+// numbered reports whether a string is a read's numbered lines rather than
+// ordinary prose. It is what lets content be drawn as code for a file whose
+// extension says nothing — a Makefile, a log, a file with no suffix at all —
+// without a web page's paragraphs being given line numbers they never had.
+func numbered(s string) bool {
+	line := s
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		line = s[:i]
+	}
+	_, _, is := numberedLine(line)
+	return is
+}

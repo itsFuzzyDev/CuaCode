@@ -204,7 +204,7 @@ func (m *model) inspectRows() []string {
 	rows = append(rows, m.section("arguments", width))
 	switch args := m.localArgs(a); {
 	case args != nil:
-		rows = append(rows, valueRows(args, width, 0)...)
+		rows = append(rows, valueRows(args, width, 0, "")...)
 	case strings.TrimSpace(a.args) != "":
 		// Arguments that would not decode are still what was sent, so they are
 		// shown as they arrived rather than reported as nothing.
@@ -312,7 +312,7 @@ func (m *model) resultRows(a act, width int) []string {
 			}
 		}
 	}
-	rows := valueRows(v, width, 0)
+	rows := valueRows(v, width, 0, "")
 	if len(rows) == 0 {
 		return []string{indent + paint(cGhost, "empty")}
 	}
@@ -323,7 +323,11 @@ func (m *model) resultRows(a act, width int) []string {
 // with values beside it; anything too long or too structured for one line goes
 // underneath, indented or in a gutter block. Depth is the nesting level, which
 // is the only thing that moves the text column.
-func valueRows(v any, width, depth int) []string {
+//
+// lang is which highlighter the code fields below are drawn with. It travels
+// down the tree because the name of the file is one level up from the patch
+// against it: the record says path once and then diff, content, old and new.
+func valueRows(v any, width, depth int, lang string) []string {
 	pad := margin + strings.Repeat("  ", depth+1)
 	avail := width - vw(pad) + vw(margin)
 
@@ -335,9 +339,17 @@ func valueRows(v any, width, depth int) []string {
 		}
 		sort.Strings(keys)
 
+		// A file record names the file it is about, and that name is the only
+		// thing that says which language its code fields are in.
+		if lang == "" {
+			if path, is := t["path"].(string); is {
+				lang = langOf(path)
+			}
+		}
+
 		var rows []string
 		for _, k := range keys {
-			rows = append(rows, fieldRows(k, t[k], width, depth)...)
+			rows = append(rows, fieldRows(k, t[k], width, depth, lang)...)
 		}
 		return rows
 
@@ -347,7 +359,7 @@ func valueRows(v any, width, depth int) []string {
 			// A list of scalars stays a list of rows; a list of objects gets its
 			// members indented under a bullet so two of them cannot blur into
 			// one.
-			if inner := valueRows(item, width, depth+1); len(inner) == 1 {
+			if inner := valueRows(item, width, depth+1, lang); len(inner) == 1 {
 				rows = append(rows, pad+paint(cRule, "• ")+strings.TrimLeft(inner[0], " "))
 			} else {
 				rows = append(rows, pad+paint(cRule, "•"))
@@ -362,7 +374,7 @@ func valueRows(v any, width, depth int) []string {
 }
 
 // fieldRows draws one key and its value.
-func fieldRows(key string, v any, width, depth int) []string {
+func fieldRows(key string, v any, width, depth int, lang string) []string {
 	pad := margin + strings.Repeat("  ", depth+1)
 	label := paint(cMuted, padTo(trunc(key, keyCol-1), keyCol))
 	avail := width - vw(pad) - keyCol + vw(margin)
@@ -376,15 +388,27 @@ func fieldRows(key string, v any, width, depth int) []string {
 		if len(t) == 0 {
 			return []string{pad + label + paint(cGhost, "{}")}
 		}
-		return append([]string{pad + label}, valueRows(t, width, depth+1)...)
+		return append([]string{pad + label}, valueRows(t, width, depth+1, lang)...)
 
 	case []any:
 		if len(t) == 0 {
 			return []string{pad + label + paint(cGhost, "[]")}
 		}
-		return append([]string{pad + label}, valueRows(t, width, depth+1)...)
+		return append([]string{pad + label}, valueRows(t, width, depth+1, lang)...)
 
 	case string:
+		// The file tool's own fields, drawn the way the permission prompt drew
+		// them before the call ran: a patch as a patch, a file's text as code.
+		// "what did that edit actually change" is most of why a call gets
+		// opened, and a grey paragraph does not answer it.
+		switch {
+		case t == "":
+		case key == "diff" || key == "patch":
+			return append([]string{pad + label}, diffRows(t, lang, width)...)
+		case (key == "content" || key == "old" || key == "new") && (lang != "" || numbered(t)):
+			return append([]string{pad + label}, codeRows(t, lang, width)...)
+		}
+
 		// The whole reason this view exists: a command's output, a page, a
 		// prompt. One line if it fits on one, a gutter block if it does not.
 		s := plain(t)

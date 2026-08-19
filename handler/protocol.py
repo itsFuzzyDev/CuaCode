@@ -39,6 +39,12 @@ class IPC:
         # go back to the inbox intact and become an ordinary turn.
         self._steer: list[Envelope] = []
         self._steer_lock = threading.Lock()
+        # Commands answered on the reader thread instead of the main loop, by
+        # action. The loop is inside generate() for a whole turn, so anything
+        # queued for it is answered only once the turn ends -- fine for "switch
+        # provider", useless for "what did that call just return". A handler
+        # here must be read-only and quick: it runs while a run is in flight.
+        self.direct: dict[str, Callable[[Envelope], None]] = {}
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
@@ -76,6 +82,15 @@ class IPC:
                     # be folded into the snapshot and move a frontend off
                     # whatever the run is actually doing.
                     self.send("status", {"type": "chat_queued"}, id_=env.id)
+                    continue
+
+                # Answered here and not queued: the point of these is that they
+                # work mid-run. A handler that raises must not take the reader
+                # thread down with it -- that would strand every later envelope,
+                # cancel included.
+                if action and (fn := self.direct.get(action)):
+                    try: fn(env)
+                    except Exception as e: self.send("status", {"state": "error", "error": str(e)}, id_=env.id)
                     continue
 
                 # If someone is waiting for this id via call(), hand it to them.

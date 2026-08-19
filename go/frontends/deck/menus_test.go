@@ -481,9 +481,12 @@ func TestFrameNeverOverflows(t *testing.T) {
 		for _, w := range []int{24, 40, 80} {
 			m := play(t, w, h)
 
-			// The worst case: a permission prompt with a note, and an input
-			// long enough to want several rows of its own.
-			m.askPermission("p", json.RawMessage(`{"name":"shell","args":{"command":"make test && ./run.sh deck"}}`))
+			// The worst case: a permission prompt with more patch in it than
+			// any screen holds, opened out to its tallest, and an input long
+			// enough to want several rows of its own.
+			m.askPermission("p", permEdit(permDiff(200)))
+			m.ov.expanded = true
+			m.scrollPermBody(40)
 			for _, r := range "one\ntwo\nthree\nfour\nfive\nsix\nseven" {
 				m.insert(r)
 			}
@@ -509,9 +512,15 @@ func TestFrameNeverOverflows(t *testing.T) {
 // feed is shortened by exactly the rows the menu draws, at every width.
 func TestOverlayGeometry(t *testing.T) {
 	open := map[string]func(*model){
-		"commands":     func(m *model) { m.openCommands(0) },
-		"files":        func(m *model) { m.files = []option{{label: "a/b.go", value: "a/b.go"}}; m.openFiles(0) },
-		"permission":   func(m *model) { m.askPermission("p", json.RawMessage(`{"name":"shell","args":{"command":"ls -la"}}`)) },
+		"commands":         func(m *model) { m.openCommands(0) },
+		"files":            func(m *model) { m.files = []option{{label: "a/b.go", value: "a/b.go"}}; m.openFiles(0) },
+		"permission":       func(m *model) { m.askPermission("p", json.RawMessage(`{"name":"shell","args":{"command":"ls -la"}}`)) },
+		"permission patch": func(m *model) { m.askPermission("p", permEdit(permDiff(60))) },
+		"permission patch open": func(m *model) {
+			m.askPermission("p", permEdit(permDiff(60)))
+			m.ov.expanded = true
+			m.scrollPermBody(20)
+		},
 		"empty":        func(m *model) { m.openCommands(0); m.ov.filter = "zzzz"; m.ov.refilter() },
 		"effort":       func(m *model) { m.runCommand("effort") },
 		"effort ultra": func(m *model) { m.ultra = true; m.runCommand("effort") },
@@ -533,5 +542,107 @@ func TestOverlayGeometry(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// permDiff is a patch too long to fit any prompt, for the tests that care what
+// happens to the rest of it.
+func permDiff(lines int) string {
+	var b strings.Builder
+	b.WriteString("--- a/main.go\n+++ b/main.go\n@@ -1," + itoa(lines) + " +1," + itoa(lines) + " @@\n")
+	for i := 1; i <= lines; i++ {
+		if i%4 == 0 {
+			b.WriteString("-\told := " + itoa(i) + "\n+\tnew := " + itoa(i) + "\n")
+			continue
+		}
+		b.WriteString(" \tx := " + itoa(i) + "\n")
+	}
+	return b.String()
+}
+
+func permEdit(diff string) json.RawMessage {
+	payload, _ := json.Marshal(map[string]any{
+		"name":    "file",
+		"args":    map[string]any{"action": "edit", "path": "main.go"},
+		"preview": map[string]any{"summary": "edit main.go (9 replacements)", "diff": diff},
+	})
+	return payload
+}
+
+// TestPermissionScrollsItsBody is what a long patch is for: the prompt shows a
+// window into it and every line is reachable by scrolling, rather than the
+// middle of the change being something you are asked to take on trust. The
+// choices stay on screen throughout — the block may never push the answer off.
+func TestPermissionScrollsItsBody(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 80, 24
+	m.askPermission("p1", permEdit(permDiff(60)))
+
+	shown := func() string { return plainOf(strings.Join(m.renderOverlay(), "\n")) }
+
+	first := shown()
+	if !strings.Contains(first, "Allow once") || !strings.Contains(first, "Deny") {
+		t.Fatal("the choices are not on screen")
+	}
+	if !strings.Contains(first, " of ") {
+		t.Error("a windowed patch does not say how much of it is showing")
+	}
+	if !strings.Contains(first, "x := 1") {
+		t.Error("the patch does not start at its first line")
+	}
+
+	m.ov.scrollBody(6)
+	if mid := shown(); strings.Contains(mid, "x := 1\n") || !strings.Contains(mid, "x := 7") {
+		t.Errorf("scrolling did not move the window:\n%s", mid)
+	}
+
+	// The end of the patch is reachable, and scrolling past it holds there.
+	m.ov.scrollBody(1000)
+	last := shown()
+	if !strings.Contains(last, "x := 59") {
+		t.Errorf("the end of the patch is unreachable:\n%s", last)
+	}
+	if !strings.Contains(last, "Allow once") || !strings.Contains(last, "Deny") {
+		t.Error("the choices went off screen at the end of the patch")
+	}
+
+	// Back to the top, and the choices are still the choices: nothing that
+	// moves the block may answer the question.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyHome})
+	if !m.overlayActive() {
+		t.Fatal("a scroll key answered the prompt")
+	}
+	if m.ov.bodyAt != 0 {
+		t.Errorf("home left the window at row %d", m.ov.bodyAt)
+	}
+}
+
+// TestPermissionBodyKeys separates the two things the arrows could mean: the
+// bare ones move the choice, the modified ones move the block.
+func TestPermissionBodyKeys(t *testing.T) {
+	m := initialModel()
+	m.width, m.height = 80, 24
+	m.askPermission("p1", permEdit(permDiff(60)))
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.ov.sel != 1 || m.ov.bodyAt != 0 {
+		t.Errorf("bare down: sel=%d bodyAt=%d, want the choice to move and nothing else", m.ov.sel, m.ov.bodyAt)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift})
+	if m.ov.sel != 1 || m.ov.bodyAt != 1 {
+		t.Errorf("shift+down: sel=%d bodyAt=%d, want the block to move and nothing else", m.ov.sel, m.ov.bodyAt)
+	}
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModAlt})
+	if m.ov.bodyAt != 2 {
+		t.Errorf("alt+down: bodyAt=%d, want the same as shift", m.ov.bodyAt)
+	}
+
+	// ctrl+o still only changes how tall the block is drawn, and answers
+	// nothing.
+	m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+	if !m.overlayActive() || !m.ov.expanded {
+		t.Error("ctrl+o no longer opens the block out")
 	}
 }

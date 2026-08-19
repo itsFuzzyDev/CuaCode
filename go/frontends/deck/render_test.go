@@ -643,3 +643,47 @@ func TestFrame(t *testing.T) {
 		t.Logf("[%s]\n%s", c.name, plainOf(m.render()))
 	}
 }
+
+// TestCodeFieldsDrawnAsCode is the inspector's half of what the permission
+// prompt already did: a file call's patch is a patch and its text is code,
+// wherever they are read. The alternative — the same bytes as a grey paragraph
+// under a gutter — is what sends people to `git diff` to find out what the
+// agent just changed.
+func TestCodeFieldsDrawnAsCode(t *testing.T) {
+	edit := map[string]any{
+		"path":  "main.go",
+		"edits": 1.0,
+		"diff":  "--- a/main.go\n+++ b/main.go\n@@ -7,3 +7,3 @@\n \tsetup()\n-\tfmt.Println(\"old\")\n+\tfmt.Println(\"new\")\n",
+	}
+	rows := plainOf(strings.Join(valueRows(edit, 80, 0, ""), "\n"))
+	if !strings.Contains(rows, "▌- ") || !strings.Contains(rows, "▌+ ") {
+		t.Errorf("a diff in a result is not drawn as a patch:\n%s", rows)
+	}
+	// The hunk header says the change starts at line 7, so the rows say so too.
+	if !strings.Contains(rows, "    8") {
+		t.Errorf("patch rows carry no line numbers:\n%s", rows)
+	}
+	if strings.Contains(rows, "@@") || strings.Contains(rows, "--- a/") {
+		t.Errorf("diff headers leaked into the rows:\n%s", rows)
+	}
+
+	read := map[string]any{
+		"path":    "main.go",
+		"lines":   3.0,
+		"content": "11\tfunc main() {\n12\t\tsetup()\n13\t}",
+	}
+	rows = plainOf(strings.Join(valueRows(read, 80, 0, ""), "\n"))
+	for _, want := range []string{"   11 │ func main() {", "   13 │ }"} {
+		if !strings.Contains(rows, want) {
+			t.Errorf("read content is not numbered code (want %q):\n%s", want, rows)
+		}
+	}
+
+	// Prose keeps its gutter block: line numbers on a web page it never had
+	// would be a worse lie than no highlighting at all.
+	page := map[string]any{"url": "https://example.com", "content": strings.Repeat("a paragraph of prose. ", 12)}
+	rows = plainOf(strings.Join(valueRows(page, 80, 0, ""), "\n"))
+	if !strings.Contains(rows, "│ a paragraph") {
+		t.Errorf("prose lost its gutter block:\n%s", rows)
+	}
+}
