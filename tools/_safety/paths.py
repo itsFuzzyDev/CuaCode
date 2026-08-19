@@ -44,3 +44,31 @@ def is_sensitive(path) -> bool:
     except (OSError, ValueError, RuntimeError): pass
     if any(r.search(s) for r in _RX): return True
     return any(extra and (extra in s) for extra in rules.extra("sensitive_paths"))
+
+# ---- scratch space ----
+
+# Mirrors handler.session.Session.notebook, derived from ctx rather than from a
+# session object because a tool is handed the one and not the other. The home
+# fallback matches file undo: a frontend that reports no session still gets a
+# scratch directory, rather than the exemption quietly existing or not
+# depending on who launched the app.
+def scratch_dir(ctx) -> Path:
+    base = (ctx or {}).get("session_dir") if hasattr(ctx, "get") else getattr(ctx, "session_dir", None)
+    return Path(base) / "notebook" if base else Path.home() / ".cuacode" / "notebook"
+
+def is_scratch(path, ctx) -> bool:
+    """Whether `path` is inside this session's scratch directory.
+
+    What makes writing there safe is not the verb but the place: nothing under
+    it is the user's, it is thrown out with the session, and asking about every
+    intermediate file the agent writes to its own workspace trains the user to
+    click through prompts that do matter.
+
+    Compared resolved, so a scratch path holding ../ is judged by where it
+    lands.
+    """
+    try:
+        d = scratch_dir(ctx).resolve()
+        p = Path(path).expanduser().resolve()
+    except (OSError, ValueError, RuntimeError): return False
+    return p == d or d in p.parents

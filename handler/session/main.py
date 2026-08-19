@@ -82,10 +82,15 @@ class Session:
 
     @property
     def notebook(self) -> Path:
-        """Session-scoped scratch space, created on demand."""
-        d = self.dir / "notebook"
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        """Session-scoped scratch space: working files that belong to this
+        conversation and not to the user's project.
+
+        A path, not a mkdir, for the same reason the session directory itself
+        is one -- a session that never writes a scratch file leaves no empty
+        directory behind. The file tool creates parents on write, so the first
+        write is what brings it into being.
+        """
+        return self.dir / "notebook"
 
     # ---- recording ----
 

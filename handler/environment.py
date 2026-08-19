@@ -97,6 +97,23 @@ def block(ctx=None, settings: dict = None, session=None) -> str:
     # between explaining the limit to the user and flailing at it.
     lines += _vision(settings)
 
+    # Named out loud because it is the whole feature: a directory the model
+    # does not know about is a directory it will not use, and the alternative
+    # it reaches for is /tmp or, worse, the user's repo.
+    if getattr(session, "notebook", None):
+        lines += [
+            "",
+            f"Scratch space for this conversation: {session.notebook}",
+            "Put working files there -- intermediate results, throwaway scripts, notes to",
+            "yourself across a long task -- rather than in /tmp or the user's project.",
+            "Created on first write, and writing there does not interrupt the user for",
+            "permission, because nothing under it is theirs. It stays with the session",
+            "directory, so it is still there if this conversation is reopened, and it is not",
+            "somewhere the user will look: anything they are meant to keep goes in the",
+            "working directory, and anything you are meant to remember goes through the",
+            "memory tool.",
+        ]
+
     lines += [
         "",
         f"Your own state lives in {home}:",
