@@ -137,7 +137,11 @@ def rollup(days: int = 0, metas: list[dict] = None) -> dict:
         sessions.append({"id": meta.get("id", ""), "title": meta.get("title", ""),
                          "updated": meta.get("updated", ""), **kept})
 
-    sessions.sort(key=lambda s: s["in"] + s["out"], reverse=True)
+    # Ranked by context, not by billed volume: the sum of re-sent prompts is what
+    # a provider charged, and it reads as "how much I used" when it is really
+    # "how many times the same window went up". The peak is how big the
+    # conversation actually got, which is the figure worth putting first.
+    sessions.sort(key=lambda s: s.get("peak") or 0, reverse=True)
     return {
         "sessions": counted, "unmeasured": unmeasured, "since": cutoff or _first_day(per_day),
         "total": total,
@@ -223,12 +227,17 @@ def render(rep: dict) -> str:
     est = "~" if total.get("est") else ""
     # The peak is only known for rounds recorded since it was; a session rolled
     # up before that says nothing rather than claiming zero.
-    peak = f"largest single prompt {_n(total['peak'])}" if total.get("peak") else ""
+    peak = _n(total["peak"]) if total.get("peak") else "\u2013"
+    # "context" comes first because it is the number that means anything: the
+    # largest window a session ever held. "billed input" is what the provider
+    # charged -- the same window re-sent every round -- and a sum that dwarfs
+    # the peak invites the same misreading every time it is the headline.
     lines = [head, "",
-             f"  prompt sent  {_n(total['in']):>10}     re-sent every round{'; ' + peak if peak else ''}",
-             f"  tokens out   {_n(total['out']):>10}     of which thinking  {est}{_n(total['think'])}",
-             f"  rounds       {total['rounds']:>10}",
-             f"  generating   {_dur(total['secs']):>10}     {tps(total)} tok/s average"]
+             f"  {'context':<13} {peak:>10}  largest single window held",
+             f"  {'billed input':<13} {_n(total['in']):>10}  re-sent every round",
+             f"  {'tokens out':<13} {_n(total['out']):>10}  of which thinking  {est}{_n(total['think'])}",
+             f"  {'rounds':<13} {total['rounds']:>10}",
+             f"  {'generating':<13} {_dur(total['secs']):>10}  {tps(total)} tok/s average"]
 
     if rep["models"]:
         lines += ["", "by model"]
@@ -248,11 +257,12 @@ def render(rep: dict) -> str:
             lines.append(f"  {d['day']}  {'█' * max(round(spent / peak * 24), 1):<24}  {_n(spent)}")
 
     if rep["top"]:
-        # Spend, rounds and peak together. The total alone is the one figure here
-        # that gets misread: it is every round's prompt added up, and the prompt
-        # goes up again in full each round, so a conversation that never held more
-        # than 25k can have been charged 472k over 24 of them.
-        lines += ["", f"  {'heaviest by spend':<21}  {'':<40}  {'spend':>7}  {'rounds':>6}  {'peak':>7}"]
+        # Context, rounds and billed volume together. Ranked by context (the
+        # peak) because that is how big each conversation actually got; the
+        # billed column is every round's prompt added up, and the prompt goes up
+        # again in full each round, so a conversation that never held more than
+        # 25k can have been charged 472k over 24 of them.
+        lines += ["", f"  {'largest context':<21}  {'':<40}  {'billed':>7}  {'rounds':>6}  {'peak':>7}"]
         for s in rep["top"]:
             # A session is named a turn or two in; one showing nothing but its
             # id is telling the truth about itself.

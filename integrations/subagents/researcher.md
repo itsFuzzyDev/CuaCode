@@ -3,7 +3,9 @@ name: researcher
 description: Reads web pages to answer one question. Fetches, follows leads, returns findings with sources.
 tools: [WebFetch]
 effort: low
-max_rounds: 10
+max_rounds: 25
+model: gemma4:31b
+provider: ollama
 output:
   properties:
     findings:

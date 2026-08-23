@@ -139,24 +139,58 @@ RULES = [
      Spec("openai", ("low", "medium", "high"), off={"reasoning_effort": "minimal"})),
     (None, "openai", r"^o[134]",   Spec("openai", ("low", "medium", "high"))),
     (None, "openai", r"gpt-oss",   Spec("openai", ("low", "medium", "high"))),
-    (None, "openai", r"^grok-4",   Spec("none")),        # not settable at all
     (None, "openai", r"^grok",     Spec("openai", ("low", "high"))),
     (None, "openai", r"^qwen3",    Spec("qwen", off={"extra_body": {"enable_thinking": False}})),
-    (None, "openai", r"minimax",   Spec("none")),        # thinking always on
 ]
+
+# Deliberately absent: rows claiming a model has no knob at all. There were two
+# -- grok-4 and minimax -- and both were true of the model that shipped under
+# that name and false of the one answering now. A permanent "cannot" written
+# here costs every future version of that model its effort control, silently;
+# an optimistic attempt costs one rejected request, which learn() then records
+# for that exact model. Where the endpoint itself says a model cannot think,
+# spec_for hears it from the endpoint, which is a fact rather than a guess.
 
 # Everything unmatched. Optimistic on purpose: the dialect's usual spelling is
 # tried once, and learn() demotes the model for good if the server says no.
 FALLBACK = {"openai": Spec("openai"), "anthropic": Spec("anthropic"),
             "ollama": Spec("ollama_bool", off={"think": False})}
 
-def spec_for(provider: str, dialect: str, model: str) -> Spec:
+def spec_for(provider: str, dialect: str, model: str, thinks: bool | None = None) -> Spec:
+    """The table's answer, unless the endpoint has already given a better one.
+
+    thinks is what the provider said about this model -- ollama answers
+    /api/show, openrouter publishes supported_parameters -- and it is three
+    valued, because "nobody asked" is not "no". It outranks every rule below in
+    one direction only: a definite False means no knob, since a rung that sends
+    a thinking parameter to a model without one is a 400 waiting to happen. A
+    True says nothing about how many rungs that model has or how they are
+    spelled, which is what the table is for, and None leaves the table alone.
+    """
+    if thinks is False: return Spec("none")
     for p, d, pat, s in RULES:
         if p and p != provider: continue
         if d and d != dialect: continue
         if pat and not re.search(pat, model or "", re.I): continue
         return s
     return FALLBACK.get(dialect, Spec("none"))
+
+def reachable(provider: str, dialect: str, model: str, level: str,
+              thinks: bool | None = None, override: dict | None = None) -> bool:
+    """Whether this rung means on this model what it says on the tin.
+
+    Only "off" can fail to: every other level degrades to a nearby rung, which
+    is coarse but honest, while "off" degrading means the box marked "no
+    thinking at all" quietly buys the cheapest thinking there is. A caller that
+    asks first can refuse the setting instead of misrepresenting it; resolve()
+    still degrades for anyone who does not ask.
+    """
+    if level != "off": return True
+    if override and "off" in override: return True
+    s = spec_for(provider, dialect, model, thinks)
+    # A model with no thinking to switch off is not one that failed to switch
+    # it off: nothing is sent at any rung, and "off" is what it already is.
+    return s.shape == "none" or s.off is not None
 
 def _without(native: dict, drop) -> dict:
     """Native params minus keys already known to be rejected, at either level.
@@ -174,7 +208,8 @@ def _without(native: dict, drop) -> dict:
     return out
 
 def resolve(provider: str, dialect: str, model: str, level: str,
-            params: dict | None = None, drop=None, override: dict | None = None) -> dict:
+            params: dict | None = None, drop=None, override: dict | None = None,
+            thinks: bool | None = None) -> dict:
     """Canonical level -> native request params, merged under the caller's own.
 
     Hand-written params always win: the table is a default, not a cage. An
@@ -194,7 +229,7 @@ def resolve(provider: str, dialect: str, model: str, level: str,
     if override and level in override:
         native = dict(override[level] or {})
     else:
-        s = spec_for(provider, dialect, model)
+        s = spec_for(provider, dialect, model, thinks)
         if level == "off":
             native = dict(s.off) if s.off is not None else SHAPES[s.shape]("low", s, params)
         else:

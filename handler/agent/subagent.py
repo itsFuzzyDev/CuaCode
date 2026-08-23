@@ -51,7 +51,7 @@ class AgentSpec:
     schema: dict = None                         # set => output is a validated dict
     provider: str = None                        # None inherits the active provider
     model: str = None
-    effort: str = "low"
+    effort: str = ""                            # "" inherits the conversation's level
     max_rounds: int = 8
     params: dict = None
 
@@ -90,7 +90,21 @@ def _submit_tool(schema: dict, box: dict) -> Tool:
     return Tool(name=SUBMIT, description=SUBMIT_DESC, input_schema=schema or {},
                 output_schema={}, active=True, require_permissions=False, handler=handler)
 
-def _settings(spec: AgentSpec):
+def _effort(spec: AgentSpec, ctx) -> str:
+    """The rung this agent runs at.
+
+    A spec that names one means it: a cheap helper that only has to summarize a
+    page should not start burning the conversation's thinking budget because
+    the user turned the dial up. Everything else inherits the conversation --
+    which is the level the user actually chose, and the one thing a subagent
+    that says nothing about effort should be doing. The account default is the
+    last resort, for a run with no conversation behind it at all.
+    """
+    from handler import config
+    inherited = ctx.get("effort") if isinstance(ctx, dict) else ""
+    return spec.effort or inherited or config.default_effort()
+
+def _settings(spec: AgentSpec, ctx=None):
     """This run's provider settings. Read fresh rather than taken from the
     parent: an agent is allowed to name a provider the conversation is not
     using, and then none of the conversation's model, params or vision flag
@@ -99,14 +113,18 @@ def _settings(spec: AgentSpec):
     active = config.settings()
     provider = spec.provider or active["provider"]
     entry = config.entry(provider)
-    out = {"provider": provider, "effort": spec.effort}
+    out = {"provider": provider, "effort": _effort(spec, ctx)}
     # Inherited only when it is the same provider -- the active model name is
     # meaningless to a different endpoint.
     model = spec.model or (active.get("model") if provider == active["provider"] else entry.get("model"))
     if model: out["model"] = model
     if "vision" in entry: out["vision"] = entry["vision"]
     if entry.get("effort_map"): out["effort_map"] = entry["effort_map"]
-    params = {**(entry.get("params") or {}), **(spec.params or {})}
+    # Per-model params follow the model the agent asked for, not the one the
+    # conversation is on: a spec that names a small model gets that model's
+    # settings, which is the whole point of keying them by model.
+    params = {**config.params_for(provider, model or config.model_for(provider)),
+              **(spec.params or {})}
     if params: out["params"] = params
     return out, config.api_key(provider), provider
 
@@ -173,7 +191,7 @@ def run(spec: AgentSpec, prompt: str, ctx=None, images: list = None) -> dict:
     if d >= MAX_DEPTH + 1:
         return {"error": "subagent nesting limit reached", "stopped": "error", "rounds": 0}
 
-    settings, key, provider = _settings(spec)
+    settings, key, provider = _settings(spec, ctx)
     allow = [t for t in (spec.tools or []) if not (d >= MAX_DEPTH and t in SPAWNERS)]
     box = {}
     extra = {SUBMIT: _submit_tool(spec.schema, box)} if spec.schema else None

@@ -41,7 +41,10 @@ def _spec(path: Path) -> AgentSpec:
         schema=meta.get("output"),
         provider=meta.get("provider"),
         model=meta.get("model"),
-        effort=meta.get("effort", "low"),
+        # Absent means inherit the conversation's level, which is what a file
+        # that never mentions effort is asking for. A file that does name one
+        # is taken at its word -- see subagent._effort.
+        effort=meta.get("effort", ""),
         max_rounds=int(meta.get("max_rounds", 8)),
         params=meta.get("params"))
 

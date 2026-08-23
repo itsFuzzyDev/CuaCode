@@ -201,6 +201,7 @@ LABELS = {
     "environment": "Environment",
     "tools": "Tool definitions",
     "skills": "Skills index",
+    "skills_on": "Skills always on",
     "memory": "Memory index",
     "mcp": "MCP index",
     "messages": "Messages",
@@ -237,6 +238,7 @@ def report(sess, settings: dict, ctx=None, messages: list = None, last: dict = N
     from handler import config, environment
     from handler.agent import providers
     from integrations.instructions import loader as instructions
+    from integrations.skills import loader as skills_mod
 
     ctx = ctx or {}
     provider = settings.get("provider") or ""
@@ -258,6 +260,11 @@ def report(sess, settings: dict, ctx=None, messages: list = None, last: dict = N
         # a file that has quietly grown to a tenth of the window is exactly the
         # sort of thing this readout exists to show them.
         {"key": "instructions", "tokens": tokens(instructions.user_block())},
+        # Skills marked always-on: whole bodies in the system prompt, not an
+        # index entry. Its own row because it is the one category a user can
+        # make arbitrarily expensive with one line of frontmatter, and the row
+        # is where they find out they did.
+        {"key": "skills_on", "tokens": tokens(skills_mod.always_block())},
         {"key": "environment", "tokens": tokens(environment.block(ctx, settings, sess))},
         {"key": "tools", "tokens": tools_left, "count": tool_count - len(sidecar)},
         {"key": "skills", "tokens": sidecar["skills"]},

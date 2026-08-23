@@ -333,7 +333,12 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
     # stays dropped, and so hand-written params keep winning over the table.
     params = effort.resolve(provider, p.name, model, settings.get("effort", ""),
                             settings.get("params"), drop=config.quirks(provider, model),
-                            override=settings.get("effort_map"))
+                            override=settings.get("effort_map"),
+                            # What the endpoint says about this model, where it
+                            # says anything: a model that has told us it cannot
+                            # think is sent no thinking parameter at all, rather
+                            # than the one the table guessed its family takes.
+                            thinks=config.can_think(provider, model))
     # Default sighted when a provider does not declare it: an unexpected 400
     # is obvious, whereas silently withholding the cameras from a capable
     # model just looks like the agent got stupid.

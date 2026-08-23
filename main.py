@@ -28,8 +28,13 @@ Ctx = type('Ctx', (dict,), {'self_identity': property(lambda s: s.get("frontmost
 ctx = Ctx(ipc.terminal_info)
 
 # A session exists from boot but nothing touches disk until a round commits,
-# so launching the app and closing it leaves no empty session dirs behind.
-sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""))
+# so launching the app and closing it leaves no empty session dirs behind. The
+# effort comes off the config rather than starting blank: the level is a
+# property of the conversation, but "which level a new conversation starts on"
+# is a property of the account, and without it every restart silently went back
+# to whatever the provider thinks is enough thinking.
+sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
+                      effort_level=config.default_effort())
 messages = sess.messages()
 # Tools run in this process, so the memory tool retitles the object the loop is
 # holding rather than the file underneath it -- a write to meta.json would be
@@ -311,7 +316,8 @@ while True:
                 name = env.data.get("name", "")
                 config.update(name, model=env.data.get("model"), key=env.data.get("api_key"),
                               vision=env.data.get("vision"), params=env.data.get("params"),
-                              effort_map=env.data.get("effort_map"))
+                              effort_map=env.data.get("effort_map"),
+                              model_params=env.data.get("model_params"))
                 if name == SETTINGS.get("provider"):
                     SETTINGS = config.settings()
                     if env.data.get("model"): sess.set_model(env.data["model"])
@@ -368,9 +374,20 @@ while True:
             # Session state, not provider state: the depth you picked belongs
             # to this conversation and travels with it on reload.
             try:
-                sess.set_effort(env.data.get("effort", ""))
-                ipc.reply(env, "status", {"state": "effort", "effort": sess.effort,
-                                          "session_id": sess.id})
+                # Refused rather than approximated. Every other rung lands on
+                # the nearest thing this model has, which is coarse but true to
+                # what it says; "off" landing on the lowest rung there is would
+                # be the box marked "no thinking at all" buying thinking.
+                if reason := config.effort_block(env.data.get("effort", "")):
+                    ipc.reply(env, "status", {"state": "error", "error": reason})
+                else:
+                    sess.set_effort(env.data.get("effort", ""))
+                    # ...and remembered as the level the next one starts on.
+                    # The session still owns what it is running at; this only
+                    # stops the choice dying with the process.
+                    config.set_default_effort(sess.effort)
+                    ipc.reply(env, "status", {"state": "effort", "effort": sess.effort,
+                                              "session_id": sess.id})
             except ValueError as e:
                 ipc.reply(env, "status", {"state": "error", "error": str(e)})
 
@@ -488,6 +505,11 @@ while True:
             # tool actually puts something in it, and an idle launch still
             # leaves no session behind.
             ctx["session_dir"] = str(sess.dir)
+            # How hard this conversation is thinking, for anything that starts
+            # a model of its own from inside a tool call. A subagent that did
+            # not name a level runs at the conversation's rather than at a
+            # constant nobody chose -- see handler/agent/subagent.py.
+            ctx["effort"] = sess.effort
             ipc.begin_run()
             round_mark = len(messages)
             # What the round in flight has been charged, held only until the
@@ -523,7 +545,15 @@ while True:
                                       # after it is re-sent every turn anyway.
                                       # Empty segments are dropped: a blank system
                                       # block is a 400 on more than one provider.
+                                      # Four now: the always-on skills sit with the
+                                      # user's standing orders because that is what
+                                      # they are -- rules in force before the first
+                                      # decision of the turn, not something to go
+                                      # and fetch -- and they are as stable as the
+                                      # block above them, so the cached prefix
+                                      # still runs to the environment block.
                                       system=[s for s in (sess.system, instructions.user_block(),
+                                                          skills.always_block(),
                                                           environment.block(ctx, SETTINGS, sess)) if s],
                                       cancelled=ipc.cancelled,
                                       # Whatever was typed while this run was
