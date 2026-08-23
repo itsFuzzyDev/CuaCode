@@ -44,13 +44,16 @@ them all into `bin/`.
 `~/.cuacode/` — everything persistent, and the thing to point a user at:
 
 ```
-config.json      providers, API keys (0600), model, params, learned quirks
+config.json      providers, API keys (0600), model, params, model_params,
+                 learned quirks
 AGENTS.md        the user's standing instructions, in every system prompt
 sessions/        one directory per conversation, canonical records
                  (todo.json, blobs/, screenshots/, notebook/)
 subagents/*.md   subagents the agent tool runs
 workflows/*.py   scripts the workflow tool runs
-skills/<name>/   skills, each with a SKILL.md
+skills/<name>/   skills, each with a SKILL.md. `always: true` in one's
+                 frontmatter, or its name in config.json's always_skills,
+                 puts its body in the system prompt instead of behind the tool
 mcp/servers.json MCP servers the mcp tool can reach
 memory/          one fact per file, under global/ projects/<slug>/ apps/<name>/
 ```
@@ -85,6 +88,19 @@ the prompt is re-sent every round — with the largest single prompt beside it.
 Subagents and workflows both run through the same `generate()`. A subagent is
 that loop with its own system prompt, a narrower tool list and a schema it must
 fill; a workflow is a script that runs several of them.
+
+A subagent also chooses what it runs on. `model:` in its frontmatter keeps the
+provider and swaps the model, `provider:` moves to another entry in
+`config.json` and uses that entry's model, and neither means it inherits the
+conversation's -- which is why an agent that only fetches and summarizes should
+name a small model rather than billing at the rate of whatever decided to call
+it. `effort:` and `params:` are the same idea one step down.
+
+Params come in two layers, both per provider entry: `params` is what every
+request to that endpoint carries, and `model_params: {<model>: {...}}` is
+merged over it for one model only. `config.params_for(provider, model)` is the
+answer, and it follows the model a subagent picked rather than the one the
+conversation is on.
 
 ## Memory, recall and session names
 

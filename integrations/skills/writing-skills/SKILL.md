@@ -37,7 +37,21 @@ disable-model-invocation: true   # the user's to invoke; never offered to you
 disable-user-invocation: true    # yours to reach for; never in the palette
 ```
 
-Write neither unless there is a reason. Model-only fits a skill that is only
+A third flag says the skill is not loaded at all — it is simply on:
+
+```markdown
+always: true                     # body goes into the system prompt at startup
+```
+
+Use it only for a rule that has to be in force before the first decision of a
+turn: a house style, a safety rule, a format every answer takes. It is charged
+on every single request for the rest of time, and it is dropped from both the
+tool list and the palette because it is already in the prompt. Everything that
+is only right *sometimes* stays on demand — that is the whole economy. The user
+can also force a skill on without editing it, by naming it in `always_skills` in
+`~/.cuacode/config.json`.
+
+Write neither of the invocation flags unless there is a reason. Model-only fits a skill that is only
 ever right in the middle of a job the user is not thinking about; user-only
 fits one that is a command in all but name — a report, a mode, a format the
 user asks for by name. Setting both leaves a skill nothing can load, and the

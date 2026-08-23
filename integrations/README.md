@@ -28,6 +28,9 @@ tool's `Description.md` uses.
 name: reviewer
 description: One line. The main agent reads this to decide whether to call you.
 tools: [file, shell]      # names from tools/. [] means none. "*" means all.
+model: gpt-5.6-mini       # optional -- a smaller model than the conversation's
+provider: openai          # optional -- a different configured provider entirely
+params: {temperature: 0}  # optional -- merged over that provider's own params
 effort: low               # off | low | medium | high | max
 max_rounds: 8             # hard stop; it returns stopped: "max_rounds"
 output:                   # a JSON-Schema subset -- see tools/_parser/Validate.py
@@ -47,6 +50,33 @@ anything else it writes is discarded. A failed validation returns to the agent
 as a tool result, so it corrects itself on the next round.
 
 Leave `output` off and the agent's final text comes back as a plain string.
+
+### Picking a model
+
+Leave `model` and `provider` off and the agent runs on whatever the
+conversation is running on -- which means a fetch-three-pages-and-summarize
+agent bills at the same rate as the model that decided to call it. Set
+`model:` to keep the provider and swap the model. Set `provider:` to move to
+another entry in `config.json` entirely, in which case that entry's own model
+is used: the conversation's model name is meaningless to a different endpoint,
+so it is never carried across.
+
+The split worth making is reading versus judging. Fetching, grepping,
+extracting fields, restating what a page said -- the answer is in the input,
+and the cheapest model that can fill a schema does it as well as the expensive
+one. Reviewing code, weighing options, deciding whether something is actually
+broken -- that is judgment, and a small model returns a confident wrong answer
+you cannot audit, because the context it reasoned over is thrown away when it
+finishes. Small model on judgment is the expensive mistake; big model on
+extraction is only the wasteful one.
+
+`params` here merges over what `config.json` already sends that provider --
+its entry's `params`, plus its `model_params[<model>]` row if the model this
+agent named has one -- so an agent only has to state what it wants *different*.
+
+`effort` is the other half of the same dial and stacks with it: an agent on a
+big model at `effort: off` still costs more per token than a small one, so
+reach for the model first and the ladder second.
 
 Two things to keep in mind while writing the prompt. A subagent starts cold: it
 sees the prompt string and nothing else, not the conversation it came from. And
@@ -116,6 +146,43 @@ disable-user-invocation: true    # not in the palette; the agent's to reach for
 
 Both default to false. Setting both would leave a skill nothing can load, so
 that folder is dropped rather than listed as installed.
+
+## Forcing a skill on
+
+A rule that has to be in force *before* the agent decides anything — a house
+style, a safety rule, an output format — cannot wait to be loaded. Asking for it
+in `AGENTS.md` ("always load the X skill") is unreliable by construction: the
+agent has to notice, decide and spend a call, and the turn it forgets is the
+turn the rule mattered. Mark it instead:
+
+```markdown
+---
+name: housestyle
+description: One line. Still read by /context, not by the agent deciding.
+always: true
+---
+```
+
+Its body goes into the system prompt at startup, whole, in every conversation.
+It is dropped from the skill tool's list and from the palette — it is already
+there, and loading it again would only pay for it twice.
+
+To force on a skill you do not want to edit — a bundled one, which an update
+overwrites — name it in `~/.cuacode/config.json` instead:
+
+```json
+{"always_skills": ["cuacode", "housestyle"]}
+```
+
+The two are the same switch and either is enough. `always: true` belongs to the
+skill (it is useless unless it is always on); the config list belongs to you
+(this machine, this setup).
+
+The cost is the trade: a forced skill is paid for on every request, forever, and
+`/context` gives them their own row so it is visible rather than mysterious. Six
+short ones is a decision; six long ones is a window with no room left in it. The
+bodies are capped at 40k characters between them, and anything past that is
+named in the prompt rather than silently dropped.
 
 Other files in the folder — scripts, templates, reference tables — are listed
 on load but not read. The body points at what to read and when; the agent gets
