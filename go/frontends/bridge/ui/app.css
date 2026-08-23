@@ -1,0 +1,441 @@
+/* Two media on one surface.
+ *
+ * The agent's prose is a document: a reading face, a measure, room to breathe.
+ * Everything the machine says — what it thought, what it touched, how it went —
+ * is an instrument: mono, small, tabular, tight. The user's own messages belong
+ * to the instrument half, because a message to an agent is a command, and the
+ * one thing a feed has to make obvious is who is speaking.
+ *
+ * The rail down the left gutter is the signature. It runs unbroken through the
+ * whole session, and each block's segment says what kind of time that was:
+ * a dot where the human spoke, a dashed line while the agent thought, a solid
+ * bar while it was touching this machine. A failed batch leaves its bar red, so
+ * a run is searchable by scanning one three-pixel column. */
+
+:root {
+  /* Ground: cold and layered rather than black, so a raised surface can be
+     raised without a border doing all the work. */
+  --ground:   #0a0d12;
+  --surface:  #10151d;
+  --rail:     #27313f;
+  --rule:     #263040;
+
+  --ink:      #c6ced9;
+  --ink-dim:  #71808f;
+  --ink-mute: #4a5666;
+  --ink-lit:  #e8eef6;
+
+  /* deck's semantic hues, pulled down in saturation to sit on a blue ground
+     without vibrating against it. Each one still means what it means there. */
+  --you:      #d98fc4;  /* the human */
+  --amber:    #d9a15c;  /* a batch of calls, while it is still running */
+  --amber-lit:#f2c078;
+  --cyan:     #5ec8ce;  /* tools that move the machine */
+  --blue:     #7fa8f0;  /* tools that look at it */
+  --mauve:    #a98fc4;  /* everything else */
+  --ok:       #7fc98a;
+  --ok-lit:   #a6e5ae;
+  --fail:     #e8615f;
+  --fail-lit: #ff8b89;
+  --code:     #f0b183;
+
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --read: ui-serif, "New York", "Iowan Old Style", Georgia, "Times New Roman", serif;
+
+  --gutter: 30px;   /* the rail's column */
+  --rail-x: 10px;   /* where the line sits inside it */
+  --gap:    16px;   /* between blocks; the rail spans it, so the line is unbroken */
+  --pad:    26px;
+  --measure: 800px; /* one column, so a tool name and its result stay adjacent */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 13px/1.55 var(--mono);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ================================================================= the feed */
+
+.feed {
+  height: 100%;
+  padding: 26px var(--pad) 140px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  outline: none;
+  overflow-anchor: none;
+  contain: strict;
+  /* Instant, never eased. A feed that is being written to has to land where the
+     text is the moment the text arrives; a smooth scroll animates the reader
+     toward a position the stream has already left, so the view is permanently a
+     few hundred milliseconds behind the thing it is following. */
+  scroll-behavior: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rail) transparent;
+
+  background-image: linear-gradient(var(--rail), var(--rail));
+  background-repeat: no-repeat;
+  background-size: 1px 100%;
+  background-position: calc(var(--pad) + var(--rail-x)) 0;
+  background-attachment: local;
+}
+.feed::-webkit-scrollbar { width: 10px; }
+.feed::-webkit-scrollbar-thumb { background: var(--rail); border-radius: 5px; }
+.feed::-webkit-scrollbar-thumb:hover { background: var(--rule); }
+.feed::-webkit-scrollbar-track { background: transparent; }
+
+/* ================================================================= the rail */
+
+.b {
+  position: relative;
+  margin: 0 0 var(--gap);
+  padding-left: var(--gutter);
+  /* No content-visibility here, deliberately. Skipping offscreen blocks needs
+     contain-intrinsic-size: auto <len> to remember what each one measured, and
+     where that is unsupported every offscreen block collapses to nothing, which
+     keeps it offscreen — a feed that empties itself the moment it outgrows the
+     window. The feed stays cheap the way it already was: text is appended to an
+     existing node rather than re-rendered, so what is already on screen costs
+     nothing to keep there. */
+  max-width: var(--measure);
+}
+
+/* A block marks its own stretch of the rail by painting over it. Nothing here
+   reaches past the block's own box, because nothing can. */
+.b::before {
+  content: "";
+  position: absolute;
+  left: var(--rail-x);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+/* A thought is not an action, so its stretch is drawn but not solid. The gaps
+   are painted in the ground colour: they have to cover the rail underneath, or
+   the dashes would sit on a continuous line and read as solid. */
+.b.think::before {
+  background: repeating-linear-gradient(
+    to bottom, var(--ink-mute) 0 3px, var(--ground) 3px 8px);
+}
+
+/* The human spoke here. */
+.b.user::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--rail-x) - 3px);
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--you);
+}
+
+/* Runtime text, which is neither party talking. */
+.b.notice::after {
+  content: "";
+  position: absolute;
+  left: calc(var(--rail-x) - 4px);
+  top: 8px;
+  width: 9px;
+  height: 1px;
+  background: var(--ink-mute);
+}
+
+/* The machine was being touched for exactly this stretch. Amber and breathing
+   while the batch is open; once it closes the colour is the verdict, and a
+   failed run stays findable by scrolling past its red. */
+.b.calls::before {
+  left: calc(var(--rail-x) - 1px);
+  width: 3px;
+  border-radius: 2px;
+  background: var(--ok);
+}
+.b.calls.open::before { background: var(--amber); animation: breathe 1.9s ease-in-out infinite; }
+.b.calls.failed::before { background: var(--fail); }
+
+@keyframes breathe { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+/* ================================================ what the human said */
+
+.b.user {
+  color: var(--ink-lit);
+  font-size: 13.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  letter-spacing: -0.005em;
+}
+
+/* ================================================ what the agent thought */
+
+.b.think { color: var(--ink-dim); font-size: 12px; }
+
+.b.think .head {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  cursor: default;
+  user-select: none;
+  padding: 1px 0;
+}
+.b.think .head:hover { color: var(--ink-dim); }
+.b.think .head .cost { letter-spacing: 0.06em; }
+.b.think .body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin-top: 5px;
+  max-width: 74ch;
+}
+.b.think.folded .body { display: none; }
+
+/* ================================================ what the agent said */
+
+/* The one place on the surface that is a document rather than a readout. */
+.b.prose .body {
+  font: 15px/1.62 var(--read);
+  color: var(--ink);
+  max-width: 68ch;
+  white-space: pre-wrap;
+  word-break: break-word;
+  letter-spacing: 0.002em;
+}
+.b.prose strong { color: var(--ink-lit); font-weight: 600; }
+.b.prose em { font-style: italic; }
+.b.prose code {
+  font: 12.5px/1.4 var(--mono);
+  color: var(--code);
+  letter-spacing: -0.01em;
+}
+.b.prose pre {
+  font: 12px/1.5 var(--mono);
+  background: var(--surface);
+  border: 1px solid var(--rail);
+  border-left: 2px solid var(--rule);
+  border-radius: 0 4px 4px 0;
+  padding: 11px 13px;
+  margin: 11px 0;
+  overflow-x: auto;
+  white-space: pre;
+  color: var(--ink);
+}
+.b.prose pre code { color: inherit; font-size: inherit; }
+
+/* ================================================ what the agent did */
+
+.b.calls .head {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--amber);
+  cursor: default;
+  user-select: none;
+  padding-bottom: 6px;
+}
+.b.calls.failed .head { color: var(--fail); }
+.b.calls:not(.open):not(.failed) .head { color: var(--ink-mute); }
+.b.calls .head .clock {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0.06em;
+  color: var(--ink-mute);
+}
+.b.calls.folded .rows { display: none; }
+
+.b.calls .rows {
+  border-left: 1px solid var(--rail);
+  padding-left: 12px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: baseline;
+  padding: 2.5px 0;
+  font-size: 12px;
+}
+.row .name { color: var(--mauve); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .name.drive { color: var(--cyan); }
+.row .name.look  { color: var(--blue); }
+.row .arg { color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The result column is the answer to the only question a row asks. */
+.row .res { color: var(--ink-mute); transition: color 500ms ease-out; }
+.row.ok   .res { color: var(--ok); }
+.row.fail .res { color: var(--fail); }
+.row.lit.ok   .res { color: var(--ok-lit); }
+.row.lit.fail .res { color: var(--fail-lit); }
+
+.row .note {
+  grid-column: 2 / -1;
+  color: var(--fail);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 2px 0 4px;
+  opacity: 0.9;
+}
+
+/* ================================================================ notices */
+
+.b.notice {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--ink-mute);
+}
+.b.notice.warn { color: var(--amber); }
+.b.notice.err  { color: var(--fail); }
+.b.notice.call { color: var(--ink-dim); }
+
+.b.resumed {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  border-top: 1px solid var(--rail);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+/* ========================================================== the empty state */
+
+/* First run shows the legend for the rail, because the rail is the one thing on
+   screen that has to be learned, and there is no better time to teach it than
+   when there is nothing else to look at. */
+.b.hint { color: var(--ink-mute); font-size: 11.5px; }
+.b.hint dl {
+  display: grid;
+  grid-template-columns: 82px 1fr;
+  gap: 7px 16px;
+  margin: 0;
+  align-items: baseline;
+}
+.b.hint dt {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  opacity: 0.65;
+}
+.b.hint dd { margin: 0; }
+.b.hint .legend { display: grid; gap: 5px; }
+.b.hint .legend span { display: flex; align-items: center; gap: 11px; }
+.b.hint .legend i {
+  display: inline-block;
+  width: 3px;
+  height: 13px;
+  border-radius: 2px;
+  flex: none;
+}
+.b.hint .legend .dot   { background: var(--you); width: 7px; height: 7px; border-radius: 50%; }
+.b.hint .legend .think { background: repeating-linear-gradient(to bottom, var(--rail) 0 3px, transparent 3px 8px); }
+.b.hint .legend .act   { background: var(--amber); }
+.b.hint kbd {
+  font: inherit;
+  color: var(--ink-dim);
+  background: none;
+  padding: 0;
+}
+
+/* ================================================== the bar at the bottom */
+
+.bar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  padding: 0 var(--pad) 20px;
+  background: linear-gradient(to bottom, rgba(10, 13, 18, 0) 0, var(--ground) 22px);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 22px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 0 1px 6px;
+}
+.status .state { color: var(--ink-dim); }
+.status .state.busy { color: var(--amber); }
+.status .state.err  { color: var(--fail); }
+.status .fail { color: var(--fail); }
+.status .gap { margin-left: auto; display: flex; align-items: center; gap: 9px; }
+
+/* Segmented, not a smooth bar: a smooth bar is a web progress indicator and
+   this is a reading off an instrument. */
+.gauge { display: flex; gap: 2px; }
+.gauge i {
+  width: 4px;
+  height: 8px;
+  background: var(--rail);
+  border-radius: 1px;
+}
+.gauge i.on { background: var(--cyan); }
+.gauge.warm i.on { background: var(--amber); }
+.gauge.hot  i.on { background: var(--fail); }
+
+/* The prompt is a command line, not a form field: one rule, one caret, and the
+   caret is the focus indicator. */
+.entry {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 12px;
+  align-items: start;
+  border-top: 1px solid var(--rail);
+  padding-top: 13px;
+  transition: border-color 160ms ease;
+}
+.entry:focus-within { border-top-color: var(--rule); }
+
+.caret {
+  color: var(--ink-mute);
+  line-height: 1.55;
+  transition: color 160ms ease;
+}
+.entry:focus-within .caret { color: var(--you); }
+
+#input {
+  background: none;
+  border: 0;
+  outline: none;
+  resize: none;
+  color: var(--ink-lit);
+  font: 13px/1.55 var(--mono);
+  letter-spacing: -0.005em;
+  max-height: 32vh;
+  overflow-y: auto;
+  padding: 0;
+}
+#input::placeholder { color: var(--ink-mute); opacity: 0.55; }
+
+/* ============================================================== responsive */
+
+@media (max-width: 620px) {
+  :root { --pad: 16px; --gutter: 24px; --rail-x: 7px; }
+  .row { grid-template-columns: 84px minmax(0, 1fr) auto; gap: 10px; }
+  .b.prose .body { font-size: 14.5px; }
+  .b.hint dl { grid-template-columns: 1fr; gap: 4px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row .res { transition: none; }
+  .b.calls.open::before { animation: none; opacity: 0.8; }
+}

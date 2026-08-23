@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+<title>CuaCode</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <main id="feed" class="feed" tabindex="-1"></main>
+
+  <footer class="bar">
+    <div class="status" id="status"></div>
+    <div class="entry">
+      <span class="caret" id="caret">&rsaquo;</span>
+      <textarea id="input" rows="1" spellcheck="false" autocomplete="off"
+                placeholder="tell the agent what to do"></textarea>
+    </div>
+  </footer>
+
+  <script src="fixture.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
