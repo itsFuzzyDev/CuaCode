@@ -25,6 +25,7 @@ const (
 	ovModels
 	ovVision
 	ovEffort
+	ovParams
 )
 
 // option is one row of a menu.
@@ -354,6 +355,16 @@ func (o *overlay) hint() string {
 	if o.kind == ovPermission {
 		return "↑↓ choose  ·  enter answer"
 	}
+	// The meter is horizontal, so it is the arrows across it that move the
+	// selection. ↑↓ still work; they are just not what the shape suggests.
+	if o.kind == ovEffort {
+		return "←→ choose  ·  enter set  ·  esc cancel"
+	}
+	// The params editor is typed into rather than chosen from, so enter means
+	// something different there and the line says which.
+	if o.kind == ovParams {
+		return "type key=value  ·  enter apply  ·  esc done"
+	}
 	return "↑↓ choose  ·  enter select  ·  esc cancel"
 }
 
@@ -424,6 +435,14 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg, ctrl, alt bool) {
 	case msg.Code == tea.KeyDown:
 		m.ov.move(1)
 
+	// Claimed for the one menu that is laid out across rather than down. The
+	// others leave them unbound, so nothing is being taken away.
+	case m.ov.kind == ovEffort && msg.Code == tea.KeyLeft:
+		m.ov.move(-1)
+
+	case m.ov.kind == ovEffort && msg.Code == tea.KeyRight:
+		m.ov.move(1)
+
 	case msg.Code == tea.KeyEnter, msg.Code == tea.KeyTab:
 		m.chooseMenu()
 
@@ -450,9 +469,66 @@ func (m *model) handleOverlayKey(msg tea.KeyPressMsg, ctrl, alt bool) {
 	}
 }
 
+// setParam applies what is on the filter line to the model the editor is open
+// on. Nothing typed means the highlighted key is offered for editing instead,
+// and the menu stays up either way -- setting three params should not mean
+// opening the same menu three times.
+func (m *model) setParam(opt option) {
+	key, val, typed := strings.Cut(m.ov.filter, "=")
+	key, val = strings.TrimSpace(key), strings.TrimSpace(val)
+	if !typed {
+		if opt.value != "" {
+			m.appendFilter(opt.value + "=")
+		}
+		return
+	}
+	if key == "" {
+		return
+	}
+	// A key with nothing after the "=" is a removal, and null is how the worker
+	// is told to drop the override rather than to set it to nothing.
+	var value any
+	if val != "" {
+		value = paramValue(val)
+	}
+	m.clearFilter()
+	// The reply is the whole listing again, so the editor reopens on it and
+	// shows the change that was just made rather than what was there before.
+	m.pickParams = true
+	m.command("provider.set", map[string]any{
+		"name":         m.provider,
+		"model_params": map[string]any{m.paramsModel: map[string]any{key: value}},
+	})
+}
+
+// The filter line and the message being composed hold the same characters:
+// what is typed into a menu is inserted into the input as well. appendFilter
+// and clearFilter move both at once, so a menu that writes its own filter --
+// or drops it -- never leaves half of it sitting in the next message.
+func (m *model) appendFilter(s string) {
+	m.insert([]rune(s)...)
+	m.ov.filter += s
+	m.ov.refilter()
+}
+
+func (m *model) clearFilter() {
+	if n := len([]rune(m.ov.filter)); n > 0 && m.cursor >= n {
+		m.input = append(m.input[:m.cursor-n], m.input[m.cursor:]...)
+		m.cursor -= n
+	}
+	m.ov.filter = ""
+	m.ov.refilter()
+}
+
 // dismissMenu closes a menu without acting, leaving what was typed in place.
 func (m *model) dismissMenu() {
 	kind, anchor := m.ov.kind, m.ov.anchor
+	// A menu opened by a command was typed into an empty input, so its filter
+	// is the only thing in there and leaving it behind means the next message
+	// starts with half a model name.
+	if anchor < 0 {
+		m.clearFilter()
+	}
 	m.closeOverlay()
 
 	// A picker opened by a trigger character takes the trigger with it, so an
@@ -492,11 +568,13 @@ func (m *model) chooseMenu() {
 		m.runCommand(opt.value)
 
 	case ovSessions:
+		m.clearFilter()
 		m.closeOverlay()
 		m.loading = true
 		m.command("session.load", map[string]any{"id": opt.value})
 
 	case ovProviders:
+		m.clearFilter()
 		m.closeOverlay()
 		m.command("provider.use", map[string]any{"name": opt.value})
 
@@ -504,15 +582,33 @@ func (m *model) chooseMenu() {
 		// The provider is unchanged; only the model moves. The worker rebuilds
 		// the history for it, because a model swap can turn vision off and a
 		// history full of screenshots would fail every request after it.
+		//
+		// probing, because the worker answers a change with the whole listing:
+		// it is read for the new state and nothing is opened. Landing in the
+		// provider picker after picking a model is not what was asked for.
+		m.clearFilter()
 		m.closeOverlay()
+		m.probing = true
 		m.command("provider.set", map[string]any{"name": m.modelProvider, "model": opt.value})
 
 	case ovVision:
 		// An empty value is the auto row: the worker picks whatever fits.
+		m.clearFilter()
 		m.closeOverlay()
+		m.probing = true
 		m.command("vision.use", map[string]any{"name": opt.value})
 
+	case ovParams:
+		m.setParam(opt)
+
 	case ovEffort:
+		// The worker refuses this too, and its refusal is the authoritative
+		// one. Caught here as well so the menu stays up on the rung you are
+		// standing on rather than closing and answering back with an error.
+		if !m.effortOK(opt.value) {
+			m.notice(cGhost, shortModel(m.modelID)+" cannot stop thinking — nothing here turns it off")
+			return
+		}
 		m.closeOverlay()
 		m.command("session.effort", map[string]any{"effort": opt.value})
 	}

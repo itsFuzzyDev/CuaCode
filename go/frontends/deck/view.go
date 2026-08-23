@@ -38,6 +38,7 @@ var (
 
 	cOK   = fg(114)
 	cWarn = fg(179)
+	cHot  = fg(208) // between warn and error: the effort ladder needs a fourth step
 	cErr  = fg(203)
 
 	// The lit variants a result wears for the moment after it arrives.

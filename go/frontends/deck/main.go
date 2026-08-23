@@ -58,14 +58,18 @@ type model struct {
 	permPolicy    map[string]string // standing answers, by tool name
 	askMode       bool              // whether the worker asks before tool calls
 	pickVision    bool              // the next providers reply opens the vision picker, not the provider one
-	probing       bool              // the next providers reply is the startup read, and opens nothing
+	pickParams    bool              // ...or the params editor for the current model
+	probing       bool              // the next providers reply opens nothing: the startup read, or the echo of a change just made
 	modelProvider string            // whose models the open model picker is showing
+	paramsModel   string            // ...and whose params the open params editor is editing
 	provider      string            // who is answering, for the status bar
 	modelID       string            // ...and on which model
 	files         []option          // cached working-directory listing for @
 	skills        []command         // user-invocable skills, as extra palette rows
 	filesCut      bool              // ...and whether the walk stopped early
 	effort        string            // the thinking level this conversation is set to
+	effortSends   map[string]string // ...and what each rung of the ladder sends this model
+	effortOff     bool              // ...and whether its bottom rung can be honoured at all
 	ultra         bool              // ultracode: on only by typing its name
 	ticking       bool              // the animation clock is running
 	loading       bool              // a session load is in flight, so its reply replays
@@ -84,7 +88,10 @@ func initialModel() *model {
 		status:     session.Snapshot{State: session.Idle},
 		animStart:  time.Now(),
 		permPolicy: map[string]string{},
-		askMode:    true, // asking is the default; /permissions turns it off
+		// Believed until a listing says otherwise: a rung greyed out on a
+		// guess is worse than one that turns out to have been refusable.
+		effortOff: true,
+		askMode:   true, // asking is the default; /permissions turns it off
 	}
 	m.push(&block{kind: kHint})
 	return m

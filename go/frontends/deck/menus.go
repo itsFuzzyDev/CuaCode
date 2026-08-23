@@ -169,6 +169,7 @@ var commands = []command{
 	{"effort", "how hard the model thinks"},
 	{"model", "switch the model on the current provider"},
 	{"vision", "which provider looks at images for a blind model"},
+	{"params", "sampling params for the current model"},
 	{"permissions", "toggle asking before tool calls"},
 	{"clear", "clear the feed"},
 	{"quit", "leave"},
@@ -177,15 +178,20 @@ var commands = []command{
 // effortLadder mirrors handler/agent/effort.py. The worker validates the value
 // anyway and rejects anything else, so the risk of them drifting apart is a
 // rejected setting rather than a silently wrong one.
+//
+// The tones are one heat ramp rather than five unrelated colours: the meter is
+// read left to right, and grey into green into amber into red says what a rung
+// costs you without a word of legend. short is what the name shrinks to when
+// the column is too narrow for "medium".
 var effortLadder = []struct {
-	name, hint string
-	tone       string
+	name, short, hint string
+	tone              string
 }{
-	{"off", "answers straight away, no thinking at all", cFaint},
-	{"low", "a moment's thought before answering", cOK},
-	{"medium", "thinks things through", cLook},
-	{"high", "works at it, and takes its time", cCall},
-	{"max", "as far as it will go — expect to wait", cErr},
+	{"off", "off", "answers straight away, no thinking at all", cFaint},
+	{"low", "low", "a moment's thought before answering", cOK},
+	{"medium", "med", "thinks things through", cWarn},
+	{"high", "high", "works at it, and takes its time", cHot},
+	{"max", "max", "as far as it will go — expect to wait", cErr},
 }
 
 // effortRows is the selection model behind the meter: one option per rung, in
@@ -198,88 +204,210 @@ func (m *model) effortRows() []option {
 	return opts
 }
 
-// The meter's geometry. Five columns of a fixed width, drawn as bars of
-// increasing height — the shape of the thing you are setting, rather than a
-// list of five words that happen to be in order.
+// effortSel is the rung the cursor is on, as an index into the ladder. Found by
+// name rather than by position: the menu's own selection indexes whatever the
+// filter left visible, which is not the ladder once anything has been typed.
+func (m *model) effortSel() int {
+	opt, ok := m.ov.selected()
+	if !ok {
+		return 0
+	}
+	for i, rung := range effortLadder {
+		if rung.name == opt.value {
+			return i
+		}
+	}
+	return 0
+}
+
+// The meter's geometry: a rail with a stop on it per rung, lit as far as the
+// one you are on. Widest first -- only the widest has room for the long names,
+// and below the narrowest the labels come off entirely rather than collide.
+var effortSizes = []struct {
+	seg  int  // rail cells between one stop and the next
+	long bool // whether the labels are spelled out
+}{{6, true}, {5, true}, {4, false}}
+
+// Rail glyphs. A stop is one cell in every terminal these were checked in, and
+// the layout measures what it draws, so a font that disagrees shifts the row
+// rather than splitting it.
 const (
-	effortCol  = 9 // cells per column
-	effortBar  = 5 // rows of bar above the baseline
-	effortWide = 5 // cells of solid bar within a column
+	stopPast = "●" // a rung the level has passed
+	stopHere = "◉" // ...the one it is at
+	stopNext = "○" // ...and one it has not reached
+	stopGone = "◌" // ...or one this model will not honour
 )
 
-// renderEffort draws the effort meter: columns rising left to right, the one
-// you are on lit and the rest left as a dim scale behind it. The top rung
-// burns; with ultracode on, the whole instrument does.
+// renderEffort draws the effort meter: a rail with five stops, lit from the
+// left up to the rung the cursor is on. A level being set, rather than five
+// words that happen to be in order. The top stop burns; with ultracode on, the
+// whole rail does.
 func (m *model) renderEffort() []string {
-	width := m.bodyW()
-	sel := 0
-	if opt, ok := m.ov.selected(); ok {
-		for i, rung := range effortLadder {
-			if rung.name == opt.value {
-				sel = i
-			}
+	width, sel := m.bodyW(), m.effortSel()
+	// The rail hangs off the caption's column rather than the title's, so the
+	// three lines under the title read as one block.
+	lead := margin + "  "
+	room := width - 2
+
+	seg, long := 0, false
+	for _, s := range effortSizes {
+		// Two cells of slack for the inset below and for a last label that
+		// reaches past the final stop.
+		if 2+len(effortLadder)+(len(effortLadder)-1)*s.seg <= room {
+			seg, long = s.seg, s.long
+			break
 		}
 	}
-
-	deck := effortCol * len(effortLadder)
-	lead := margin + strings.Repeat(" ", max((width-deck)/2, 0))
-	bar := strings.Repeat("█", effortWide)
-
-	// A column is lit when it is the one selected. Everything else stays a
-	// scale: present enough to read the shape, quiet enough not to compete.
-	paintCol := func(i int, s string) string {
-		switch {
-		case m.ultra:
-			return gradient(s, ultraRamp, m.anim()+time.Duration(i)*120*time.Millisecond)
-		case i != sel:
-			return paint(cRule, s)
-		case effortLadder[i].name == "max":
-			return gradient(s, emberRamp, m.anim())
-		}
-		return paint(effortLadder[i].tone+bold, s)
+	if seg == 0 {
+		return m.renderEffortLine(sel, width)
 	}
 
-	rows := make([]string, 0, effortBar+4)
-	for r := range effortBar {
-		var b strings.Builder
-		b.WriteString(lead)
-		for i := range effortLadder {
-			cell := strings.Repeat(" ", effortWide)
-			if i+1 >= effortBar-r { // bars grow with the rung
-				cell = bar
-			}
-			b.WriteString(center(paintCol(i, cell), effortWide, effortCol))
+	// Half of the first label hangs to the left of its stop, so the rail is
+	// inset by that much: without it the leftmost label is the one thing on
+	// the row that cannot sit under what it names.
+	first := effortLadder[0].short
+	if long {
+		first = effortLadder[0].name
+	}
+	pad := (vw(first) - 1) / 2
+
+	var rail strings.Builder
+	rail.WriteString(lead + strings.Repeat(" ", pad))
+	for i := range effortLadder {
+		if i > 0 {
+			rail.WriteString(m.paintSeg(i, sel, seg))
 		}
-		rows = append(rows, b.String())
+		rail.WriteString(m.paintStop(i, sel))
 	}
 
-	// A baseline under the columns, so an empty rung still has somewhere to be.
-	var base, names strings.Builder
-	base.WriteString(lead)
+	// Labels centred on their stops, and never on top of each other: a name
+	// too wide for its share of the rail pushes right rather than overlapping
+	// the one before it, which is the only way the row can be wrong.
+	var names strings.Builder
 	names.WriteString(lead)
+	at := 0
 	for i, rung := range effortLadder {
-		// The baseline thickens under the column you are on, so the selection
-		// is legible without relying on colour to carry it.
-		rule, tone := strings.Repeat("─", effortWide), cRule
-		if i == sel {
-			rule, tone = strings.Repeat("━", effortWide), effortLadder[i].tone
+		name := rung.short
+		if long {
+			name = rung.name
 		}
-		base.WriteString(center(paint(tone, rule), effortWide, effortCol))
-
-		nameTone := cFaint
-		if i == sel {
-			nameTone = cInk + bold
+		start := max(pad+i*(seg+1)-(vw(name)-1)/2, at)
+		if i > 0 {
+			start = max(start, at+1)
 		}
-		names.WriteString(center(paint(nameTone, rung.name), vw(rung.name), effortCol))
+		names.WriteString(strings.Repeat(" ", start-at))
+		names.WriteString(paint(m.nameTone(i, sel), name))
+		at = start + vw(name)
 	}
-	rows = append(rows, base.String(), names.String(), "")
 
-	// One line about the rung you are on, which is the only one worth reading.
-	caption := effortLadder[sel].hint
-	if effortLadder[sel].name == m.effort {
-		caption += "   ·   in force"
+	return append([]string{"", rail.String(), names.String(), ""},
+		m.effortCaption(sel, width)...)
+}
+
+// renderEffortLine is the rail with no room for labels: the stops alone, and
+// the name of the rung beside them. A narrow terminal gets a shorter
+// instrument rather than a clipped one.
+func (m *model) renderEffortLine(sel, width int) []string {
+	var b strings.Builder
+	b.WriteString(margin + "  ")
+	for i := range effortLadder {
+		if i > 0 {
+			b.WriteString(m.paintSeg(i, sel, 2))
+		}
+		b.WriteString(m.paintStop(i, sel))
 	}
-	return append(rows, margin+"  "+paint(cMuted, trunc(caption, width-2)))
+	b.WriteString("  " + paint(m.nameTone(sel, sel), effortLadder[sel].name))
+	return append([]string{"", b.String(), ""}, m.effortCaption(sel, width)...)
+}
+
+// paintSeg draws the length of rail leading into stop i. Lit rail is heavy and
+// takes the colour of the stop it arrives at, so the ladder warms as it climbs;
+// rail past the cursor stays a thin scale, and rail leaving a rung this model
+// will not honour is drawn broken.
+func (m *model) paintSeg(i, sel, n int) string {
+	switch {
+	case !m.effortOK(effortLadder[i-1].name):
+		return paint(cGhost, strings.Repeat("╌", n))
+	case m.ultra:
+		return gradient(strings.Repeat("━", n), ultraRamp,
+			m.anim()+time.Duration(i)*120*time.Millisecond)
+	case i <= sel:
+		return paint(effortLadder[i].tone, strings.Repeat("━", n))
+	}
+	return paint(cRule, strings.Repeat("─", n))
+}
+
+// paintStop draws one stop: filled behind the cursor, ringed at it, hollow
+// ahead of it, and broken where the rung is not on offer at all.
+func (m *model) paintStop(i, sel int) string {
+	rung := effortLadder[i]
+	switch {
+	case !m.effortOK(rung.name):
+		return paint(cGhost, stopGone)
+	case m.ultra:
+		glyph := stopPast
+		if i == sel {
+			glyph = stopHere
+		}
+		return gradient(glyph, ultraRamp, m.anim()+time.Duration(i)*120*time.Millisecond)
+	case i == sel && rung.name == "max":
+		return gradient(stopHere, emberRamp, m.anim())
+	case i == sel:
+		return paint(rung.tone+bold, stopHere)
+	case i < sel:
+		return paint(rung.tone, stopPast)
+	}
+	return paint(cRule, stopNext)
+}
+
+// nameTone is the three states a label can be in, and the middle one is the
+// point: the rung actually in force keeps its colour while the cursor is
+// elsewhere, so moving along the rail never loses sight of what the
+// conversation is set to.
+func (m *model) nameTone(i, sel int) string {
+	rung := effortLadder[i]
+	switch {
+	case !m.effortOK(rung.name):
+		return cGhost
+	case i == sel:
+		return cInk + bold
+	case rung.name == m.effort:
+		return rung.tone
+	}
+	return cFaint
+}
+
+// effortCaption is what sits under the meter: one line about the rung the
+// cursor is on, and -- because a knob whose effect is invisible is a knob
+// nobody trusts -- what choosing it actually puts on the wire for the model in
+// use. The second line is the worker's own translation of the rung, not a guess
+// made here, and it is the one place that says out loud when a rung does
+// nothing at all on this model.
+func (m *model) effortCaption(sel, width int) []string {
+	rung := effortLadder[sel]
+	if !m.effortOK(rung.name) {
+		// Not a rung with a caveat: a rung that is not there. Saying what the
+		// model would do instead is the whole point -- the alternative is a
+		// setting that reads as "no thinking at all" and buys the cheapest
+		// thinking on offer.
+		return []string{margin + "  " + paint(cMuted, trunc(
+			shortModel(m.modelID)+" cannot stop thinking — this would quietly mean its lowest rung", width-2))}
+	}
+	line := rung.hint
+	if rung.name == m.effort {
+		line += sep + "in force"
+	}
+	rows := []string{margin + "  " + paint(cMuted, trunc(line, width-2))}
+
+	sends, known := m.effortSends[rung.name]
+	if !known {
+		return rows
+	}
+	label := "sends  " + sends
+	if sends == "" {
+		label = "sends nothing — " + shortModel(m.modelID) + " has no knob for this"
+	}
+	return append(rows, margin+"  "+paint(cGhost, trunc(label, width-2)))
 }
 
 // center pads s into a field of w cells. The visible width is passed in because
@@ -390,10 +518,28 @@ func (m *model) runCommand(name string) {
 		m.pickVision, m.probing = true, false
 		m.command("provider.list", nil)
 
+	case "params":
+		// Third reader of the same listing: it already carries this provider's
+		// params and its per-model overrides, so nothing new has to be asked.
+		m.pickParams, m.probing = true, false
+		m.command("provider.list", nil)
+
 	case "effort":
 		// The ladder is fixed, so there is nothing to ask the worker for: the
 		// menu goes straight up and the choice is what gets sent.
 		m.openOverlay(ovEffort, "how hard should it think?", m.effortRows(), -1)
+		// Opened on the rung in force, because this is a setting being
+		// adjusted rather than a list being browsed -- and because opening on
+		// the bottom rung means enter, the most obvious key in the menu, turns
+		// thinking off. Nothing in force lands in the middle rather than at
+		// either end: an unset conversation is on the provider's own default,
+		// which is nobody's idea of "off".
+		m.ov.sel = len(effortLadder) / 2
+		for i, rung := range effortLadder {
+			if rung.name == m.effort {
+				m.ov.sel = i
+			}
+		}
 	}
 }
 
@@ -450,16 +596,86 @@ func (m *model) openSessions(data json.RawMessage) {
 	m.openOverlay(ovSessions, "session", opts, -1)
 }
 
+// providerRow is one entry of the worker's provider listing. Named rather than
+// inline because three menus read it now: the provider picker, the vision
+// picker and the params editor.
+type providerRow struct {
+	Name    string `json:"name"`
+	Model   string `json:"model"`
+	Active  bool   `json:"active"`
+	HasKey  bool   `json:"has_key"`
+	Vision  bool   `json:"vision"`
+	Default string `json:"default_model"`
+	// What this endpoint is sent on every request, and what one model of it is
+	// sent on top of that.
+	Params      map[string]any            `json:"params"`
+	ModelParams map[string]map[string]any `json:"model_params"`
+	// ...and what each rung of the effort ladder would put on the wire for
+	// this model. Resolved by the worker, which is the only side that knows:
+	// the translation is per provider, dialect and model, and it has already
+	// had this pairing's rejected keys taken out of it.
+	EffortPreview map[string]map[string]any `json:"effort_preview"`
+	// ...and whether its bottom rung means anything. Every other rung lands on
+	// the nearest thing the model has; only this one can be an outright lie,
+	// which is why it is answered separately rather than read out of the
+	// preview above.
+	EffortOff bool `json:"effort_off"`
+}
+
+// effortOK is whether a rung can be set on the model in use. Only the bottom
+// one is ever refused, and only once a listing has said so: an unasked worker
+// gets the benefit of the doubt rather than a control greyed out on a hunch.
+func (m *model) effortOK(level string) bool {
+	return level != "off" || m.effortSends == nil || m.effortOff
+}
+
+// effortSends renders each rung's native parameters as one line, for the meter
+// to show under itself. Nested bags -- openrouter's extra_body, anthropic's
+// thinking -- are flattened to dotted keys, so a glance says which knob is
+// being turned rather than which shape the provider wraps it in. A rung whose
+// entry is empty genuinely sends nothing, and the meter says so; a nil map
+// means no listing has arrived yet, which is not the same thing.
+func effortSends(preview map[string]map[string]any) map[string]string {
+	if preview == nil {
+		return nil
+	}
+	out := make(map[string]string, len(preview))
+	for lvl, native := range preview {
+		var parts []string
+		flatten("", native, &parts)
+		sort.Strings(parts)
+		out[lvl] = strings.Join(parts, "  ·  ")
+	}
+	return out
+}
+
+// flatten walks a decoded json object into "a.b=c" strings.
+func flatten(prefix string, v map[string]any, out *[]string) {
+	for k, val := range v {
+		// Whether the thinking text is streamed back is a question about this
+		// frontend, not about how hard the model is thinking.
+		if k == "display" {
+			continue
+		}
+		if nested, ok := val.(map[string]any); ok {
+			flatten(prefix+k+".", nested, out)
+			continue
+		}
+		*out = append(*out, prefix+k+"="+scalar(val))
+	}
+}
+
+// modelName is the model this entry would actually use.
+func (p providerRow) modelName() string {
+	if p.Model != "" {
+		return p.Model
+	}
+	return p.Default
+}
+
 func (m *model) openProviders(data json.RawMessage) {
 	var reply struct {
-		Providers []struct {
-			Name    string `json:"name"`
-			Model   string `json:"model"`
-			Active  bool   `json:"active"`
-			HasKey  bool   `json:"has_key"`
-			Vision  bool   `json:"vision"`
-			Default string `json:"default_model"`
-		} `json:"providers"`
+		Providers []providerRow `json:"providers"`
 		// Which provider was named to look at images, and which one that
 		// actually resolves to right now — they differ when nothing was named,
 		// or when what was named has since lost its key.
@@ -468,7 +684,7 @@ func (m *model) openProviders(data json.RawMessage) {
 	}
 	if json.Unmarshal(data, &reply) != nil || len(reply.Providers) == 0 {
 		quiet := m.probing // the startup read says nothing, even when it fails
-		m.pickVision, m.probing = false, false
+		m.pickVision, m.pickParams, m.probing = false, false, false
 		if !quiet {
 			m.notice(cGhost, "no providers configured")
 		}
@@ -478,19 +694,25 @@ func (m *model) openProviders(data json.RawMessage) {
 	// Whichever listing this is, it is also the freshest word on who is
 	// answering — the status bar takes it from here rather than from the choice
 	// that was made, because the worker is the one that decides what stuck.
+	var active providerRow
 	for _, p := range reply.Providers {
 		if !p.Active {
 			continue
 		}
-		m.provider, m.modelID = p.Name, p.Model
-		if m.modelID == "" {
-			m.modelID = p.Default
-		}
+		active = p
+		m.provider, m.modelID = p.Name, p.modelName()
+		m.effortSends, m.effortOff = effortSends(p.EffortPreview), p.EffortOff
 	}
 
 	// The startup read only wanted that much. Nothing goes up.
 	if m.probing {
 		m.probing = false
+		return
+	}
+
+	if m.pickParams {
+		m.pickParams = false
+		m.openParams(active)
 		return
 	}
 
@@ -547,6 +769,80 @@ func (m *model) openProviders(data json.RawMessage) {
 		opts = append(opts, option{label: label, hint: hint, value: p.Name})
 	}
 	m.openOverlay(ovProviders, "provider", opts, -1)
+}
+
+// openParams lists what this provider's current model is actually sent, and is
+// where it gets changed. Two layers in one list: the entry's own `params`,
+// which every model under it is sent, and `model_params[<model>]`, which only
+// this one is and which wins on a key both set.
+//
+// There is no text field to build. The filter line is the editor: "temperature=0"
+// sets it for this model, "temperature=" drops the override and lets the
+// provider-wide value show through again, and Enter on a row with nothing typed
+// puts that key in front of the cursor so a value can be typed after it.
+func (m *model) openParams(p providerRow) {
+	if p.Name == "" {
+		m.notice(cGhost, "no active provider")
+		return
+	}
+	model := p.modelName()
+	if model == "" {
+		m.notice(cGhost, "no model set on "+p.Name+" — pick one with /model first")
+		return
+	}
+	over := p.ModelParams[model]
+
+	seen := map[string]bool{}
+	keys := make([]string, 0, len(p.Params)+len(over))
+	for _, set := range []map[string]any{over, p.Params} {
+		for k := range set {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+
+	opts := make([]option, 0, len(keys))
+	for _, k := range keys {
+		// Which layer the value on screen came from, said out loud: the whole
+		// point of the menu is the difference between "this model" and "every
+		// model on this provider", and a bare number does not carry it.
+		v, scope, tone := p.Params[k], "all "+p.Name, cMuted
+		if ov, ok := over[k]; ok {
+			v, scope, tone = ov, "this model", cOK
+		}
+		opts = append(opts, option{label: k + " = " + paramText(v), hint: scope, value: k, tone: tone})
+	}
+	if len(opts) == 0 {
+		opts = append(opts, option{label: "nothing set", hint: "type key=value", tone: cGhost})
+	}
+
+	m.paramsModel = model
+	m.openOverlay(ovParams, p.Name+" / "+model, opts, -1)
+	m.ov.note = "key=value sets it for this model · key= clears it"
+}
+
+// paramText draws a value the way it would be written back: as JSON, so a
+// string keeps its quotes and 0 does not become "0".
+func paramText(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "?"
+	}
+	return string(b)
+}
+
+// paramValue reads what was typed. JSON first — 0.7, true and [1,2] all mean
+// what they look like — and a bare word that is not JSON stays a string,
+// because having to quote a word to send a word is a rule nobody remembers.
+func paramValue(s string) any {
+	var v any
+	if json.Unmarshal([]byte(s), &v) == nil {
+		return v
+	}
+	return s
 }
 
 // openModels turns a model.list reply into a picker. The list comes from the

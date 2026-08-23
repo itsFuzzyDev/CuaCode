@@ -354,6 +354,86 @@ func TestResumeFlag(t *testing.T) {
 	}
 }
 
+// TestEffortSends checks the line under the meter that says what a rung
+// actually puts on the wire -- including the case that matters most, a rung
+// this model has no knob for, which has to say so rather than look set.
+func TestEffortSends(t *testing.T) {
+	m := play(t, 80, 24)
+	m.modelID = "glm-5.3"
+	m.effortSends = effortSends(map[string]map[string]any{
+		"low": {"extra_body": map[string]any{"reasoning": map[string]any{"effort": "low"}}},
+		"max": {},
+	})
+	m.runCommand("effort")
+
+	for _, c := range []struct{ rung, want string }{
+		{"low", "extra_body.reasoning.effort=low"},
+		{"max", "sends nothing"},
+	} {
+		m.ov.sel = 0
+		for i, rung := range effortLadder {
+			if rung.name == c.rung {
+				m.ov.sel = i
+			}
+		}
+		if got := plainOf(strings.Join(m.renderEffort(), "\n")); !strings.Contains(got, c.want) {
+			t.Errorf("%s: meter is missing %q:\n%s", c.rung, c.want, got)
+		}
+	}
+
+	// A rung the worker has said nothing about yet claims nothing on its
+	// behalf: no listing has arrived, which is not the same as an empty one.
+	m.effortSends = nil
+	if got := plainOf(strings.Join(m.renderEffort(), "\n")); strings.Contains(got, "sends") {
+		t.Errorf("the meter invented what a rung sends before hearing it:\n%s", got)
+	}
+
+	// Too narrow for labels: a shorter rail, not a clipped one.
+	m.width = 24
+	got := plainOf(strings.Join(m.renderEffort(), "\n"))
+	if strings.Contains(got, "medium   high") {
+		t.Errorf("the labelled rail was drawn into a narrow frame:\n%s", got)
+	}
+	if !strings.Contains(got, stopHere) {
+		t.Errorf("the narrow rail lost its cursor:\n%s", got)
+	}
+}
+
+// TestEffortOffRefused covers the one rung that can be a lie rather than an
+// approximation: a model with no way to stop thinking must not accept "off"
+// and quietly buy its cheapest thinking instead.
+func TestEffortOffRefused(t *testing.T) {
+	m := play(t, 80, 24)
+	m.modelID = "glm-5.2"
+	m.effortSends = effortSends(map[string]map[string]any{"off": {"reasoning_effort": "low"}})
+	m.effortOff = false
+	m.runCommand("effort")
+	m.ov.sel = 0
+
+	meter := plainOf(strings.Join(m.renderEffort(), "\n"))
+	if !strings.Contains(meter, "╌") {
+		t.Errorf("the unreachable rung is drawn as an ordinary one:\n%s", meter)
+	}
+	if !strings.Contains(meter, "cannot stop thinking") {
+		t.Errorf("the meter does not say why the rung is out:\n%s", meter)
+	}
+
+	m.chooseMenu()
+	if !m.overlayActive() {
+		t.Error("choosing a rung the model cannot honour closed the menu")
+	}
+
+	// ...and it is only ever that rung, and only once the worker has said so.
+	m.ov.sel = 4
+	if !m.effortOK("max") {
+		t.Error("max was refused along with off")
+	}
+	m.effortSends = nil
+	if !m.effortOK("off") {
+		t.Error("off was refused before any listing said it should be")
+	}
+}
+
 // TestEffortMenu checks the ladder the worker will accept, and that /sessions
 // is gone from the palette now that resuming is a startup flag.
 func TestEffortMenu(t *testing.T) {
@@ -393,26 +473,42 @@ func TestEffortMenu(t *testing.T) {
 	if got, want := strings.Join(levels, ","), "off,low,medium,high,max"; got != want {
 		t.Errorf("ladder is %q, want %q", got, want)
 	}
-	// The meter is a staircase: each column stands one row taller than the one
-	// before it, which is the whole reason it is drawn rather than listed.
-	meter := plainOf(strings.Join(m.renderEffort(), "\n"))
-	var heights []int
-	for _, line := range strings.Split(meter, "\n") {
-		if n := strings.Count(line, "█"); n > 0 {
-			heights = append(heights, n)
-		}
-	}
-	if len(heights) != 5 {
-		t.Fatalf("meter has %d rows of bar, want 5:\n%s", len(heights), meter)
-	}
-	for i := 1; i < len(heights); i++ {
-		if heights[i] <= heights[i-1] {
-			t.Errorf("row %d is not wider than the one above it:\n%s", i, meter)
-		}
+	// The meter opens on the rung in force rather than at the bottom of the
+	// ladder, so the most obvious key in the menu does not turn thinking off.
+	if got := effortLadder[m.effortSel()].name; got != "high" {
+		t.Errorf("the meter opened on %q, want the rung in force", got)
 	}
 
-	// The selection is marked in the baseline too, so it survives without
-	// colour, and the caption follows it.
+	// The meter is a rail lit as far as the rung you are on: everything behind
+	// the cursor filled, everything ahead of it hollow, and exactly one stop
+	// marking where the cursor is. That ordering is the whole reason it is
+	// drawn rather than listed.
+	for _, sel := range []int{0, 2, 4} {
+		m.ov.sel = sel
+		meter := plainOf(strings.Join(m.renderEffort(), "\n"))
+		rail := ""
+		for _, line := range strings.Split(meter, "\n") {
+			if strings.Contains(line, stopHere) {
+				rail = strings.TrimSpace(line)
+			}
+		}
+		if rail == "" {
+			t.Fatalf("sel=%d: no stop marks the cursor:\n%s", sel, meter)
+		}
+		if got := strings.Count(rail, stopHere); got != 1 {
+			t.Errorf("sel=%d: %d stops claim to be the cursor:\n%s", sel, got, rail)
+		}
+		if got := strings.Count(rail, stopPast); got != sel {
+			t.Errorf("sel=%d: %d stops behind the cursor, want %d:\n%s", sel, got, sel, rail)
+		}
+		if got, want := strings.Count(rail, stopNext), len(effortLadder)-sel-1; got != want {
+			t.Errorf("sel=%d: %d stops ahead of the cursor, want %d:\n%s", sel, got, want, rail)
+		}
+	}
+	m.ov.sel = 3
+
+	// The cursor is marked on the rail itself, so it survives without colour,
+	// and the caption follows it.
 	for _, c := range []struct {
 		sel  int
 		want string
@@ -422,10 +518,10 @@ func TestEffortMenu(t *testing.T) {
 		if !strings.Contains(got, c.want) {
 			t.Errorf("sel=%d: caption missing %q:\n%s", c.sel, c.want, got)
 		}
-		if !strings.Contains(got, "━") {
-			t.Errorf("sel=%d: nothing marks the selected column:\n%s", c.sel, got)
+		if !strings.Contains(got, stopHere) {
+			t.Errorf("sel=%d: nothing marks the rung the cursor is on:\n%s", c.sel, got)
 		}
-		if strings.Contains(got, "·   in force") && c.sel != 3 {
+		if strings.Contains(got, "in force") && c.sel != 3 {
 			t.Errorf("sel=%d: claims to be in force when high is:\n%s", c.sel, got)
 		}
 	}

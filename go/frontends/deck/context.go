@@ -82,6 +82,7 @@ var ctxTone = map[string]string{
 	"environment": cSide,
 	"tools":       cDrive,
 	"skills":      cCall,
+	"skills_on":   cCall,
 	"memory":      cUser,
 	"mcp":         cWarn,
 	"messages":    cOK,
@@ -402,12 +403,13 @@ func (m *model) renderUsage(b *block) []string {
 	rows := []string{
 		margin + trunc(paint(cRule, "▸ ")+paint(cInk+bold, "usage")+paint(cGhost, sep+head), width),
 		"",
-		// "prompt sent", not "tokens in": the prompt goes up again in full every
-		// round, so a 10k conversation that took two rounds was charged 20k of
-		// input while never holding more than 10k. The sum is what was billed,
-		// the peak is how big the thing actually got, and a page showing only
-		// the first invites exactly the double-take it should be preventing.
-		line("prompt sent", paint(cInk, fmtTokens(rep.Total.In))+paint(cFaint, prompted(rep.Total.Peak))),
+		// "context" leads: the largest window a session ever held is the number
+		// that means anything. The prompt goes up again in full every round, so a
+		// 10k conversation that took two rounds was charged 20k of input while
+		// never holding more than 10k -- that sum is billing, and leading with it
+		// invites exactly the double-take the context line prevents.
+		line("context", paint(cInk, ctxToken(rep.Total.Peak))+" largest single window"),
+		line("billed input", paint(cInk, fmtTokens(rep.Total.In))+" re-sent every round"),
 		line("tokens out", paint(cInk, fmtTokens(rep.Total.Out))+
 			paint(cThink, "   of which thinking "+estTokens(rep.Total.Think, rep.Total.Est))),
 		line("rounds", paint(cInk, itoa(rep.Total.Rounds))),
@@ -460,15 +462,14 @@ func (m *model) renderUsage(b *block) []string {
 	}
 
 	if len(rep.Top) > 0 {
-		// "by spend", and the rounds and the peak beside it, because the total on
-		// its own is the one number on this page that reliably gets misread. It is
-		// every round's prompt added up, and the prompt goes up again in full each
-		// round -- a conversation that never held more than 25k can have been
-		// charged 472k over 24 of them. Ranked by spend because that is what it
-		// cost; sized by peak because that is how big it got.
+		// "largest context", the peak, because that is how big each conversation
+		// actually got; the billed column is every round's prompt added up, and
+		// the prompt goes up again in full each round -- a conversation that never
+		// held more than 25k can have been charged 472k over 24 of them. Ranked
+		// by context; billed is what it cost.
 		labelW := max(inner-24, 12)
-		rows = append(rows, "", margin+"  "+trunc(paint(cInk+bold, padTo("heaviest by spend", labelW))+
-			paint(cMuted, padLeft("spend", 8)+padLeft("rounds", 8)+padLeft("peak", 8)), inner))
+		rows = append(rows, "", margin+"  "+trunc(paint(cInk+bold, padTo("largest context", labelW))+
+			paint(cMuted, padLeft("billed", 8)+padLeft("rounds", 8)+padLeft("peak", 8)), inner))
 		for _, s := range rep.Top {
 			label := s.Title
 			if label == "" {
@@ -496,13 +497,13 @@ func (m *model) renderUsage(b *block) []string {
 		trunc("counted from what providers charged · main.py --usage for the same figures in a shell", inner)))
 }
 
-// prompted explains the input total. The peak is unknown for sessions rolled up
-// before it was recorded, and an unknown peak says nothing rather than zero.
-func prompted(peak int) string {
+// ctxToken renders the context window, or an en dash when it is unknown -- a
+// session rolled up before the peak was recorded says nothing rather than zero.
+func ctxToken(peak int) string {
 	if peak <= 0 {
-		return "   re-sent each round"
+		return "\u2013"
 	}
-	return "   re-sent each round · largest " + fmtTokens(peak)
+	return fmtTokens(peak)
 }
 
 func rate(b usageBucket) float64 {
