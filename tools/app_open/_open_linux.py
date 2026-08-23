@@ -28,3 +28,25 @@ def snap_region(win_id: str | None, x_start_frac: float, x_end_frac: float, focu
     subprocess.run(["xdotool", "windowmove", win_id, str(x0), "0"], check=True)
     subprocess.run(["xdotool", "windowsize", win_id, str(x1 - x0), str(sh)], check=True)
     return True
+
+def gui_apps() -> dict[str, str]:
+    """{window name: window id} for every visible window.
+
+    X has no notion of "the application" that survives being asked from the
+    outside, so the window title is the identity here. It is coarse -- a title
+    that changes reads as a new window -- but the only thing built on it is
+    "was this here a moment ago", and a retitled window is already parked.
+    """
+    r = subprocess.run(["xdotool", "search", "--onlyvisible", "--name", "."],
+                       capture_output=True, text=True)
+    out = {}
+    for wid in r.stdout.split():
+        n = subprocess.run(["xdotool", "getwindowname", wid],
+                           capture_output=True, text=True).stdout.strip()
+        if n: out.setdefault(n, wid)
+    return out
+
+
+def wait_for_window(win_id: str, timeout: float = 8) -> bool:
+    """A window id was only handed out because the window exists."""
+    return bool(win_id)

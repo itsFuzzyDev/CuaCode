@@ -1,21 +1,17 @@
-import sys, platform
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent))
+from tools import _window
 
-OS = platform.system()
-
-def _platform_module():
-    if OS == "Darwin": import _open_macos as m
-    elif OS == "Windows": import _open_windows as m
-    else: import _open_linux as m
-    return m
 
 def run(args: dict, ctx) -> dict:
     app = args["app"]
-    m = _platform_module()
+    m = _window.backend()
 
     self_handle = m.get_frontmost()
-    self_snapped = m.snap_region(self_handle, 0.0, 0.3)
+    self_snapped = _window.park_self(self_handle)
+
+    # Taken before the launch so that anything the app drags up with it -- a
+    # helper process, a second app it hands the request to -- is known to be new
+    # rather than assumed to have always been there.
+    _window.baseline()
 
     handle = m.open_app(app)
     if not handle:
@@ -24,5 +20,10 @@ def run(args: dict, ctx) -> dict:
 
     # The one snap that raises: the agent is about to drive this app, so it
     # has to end the call holding keyboard focus.
-    app_snapped = m.snap_region(handle, 0.3, 1.0, focus=True)
+    app_snapped = m.snap_region(handle, *_window.APP_REGION, focus=True)
+    if app_snapped:
+        _window.remember(handle, app)
+    # The app is accounted for now, so the next caller that asks what is new
+    # does not find it and park it a second time.
+    _window.baseline()
     return {"ok": True, "app": app, "snapped": app_snapped, "self_snapped": self_snapped}

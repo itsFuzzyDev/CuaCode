@@ -12,6 +12,7 @@ one server's tool schemas. `call` then runs a tool. A server process starts on
 first use and is kept for the rest of the session.
 """
 from integrations.mcp import client, loader
+from tools import _window
 import re
 
 MAX_TOOLS_SHOWN = 60
@@ -159,12 +160,20 @@ def _with_handle(conn, cfg: dict, tool: str, arguments: dict, sid: str) -> dict:
 
 def _call(name: str, tool: str, arguments: dict, session: str | None, ctx) -> dict:
     cfg = loader.get(name)
+    # A server is free to start a GUI of its own -- a browser is the usual one --
+    # and that window is the agent's doing even though no tool here opened it.
+    # Noted before the call so it can be parked after, rather than left sitting
+    # wherever the app last remembered being, which is over the terminal.
+    _window.baseline()
     conn = client.pool(name, cfg)
     sid = _resolve_session(name, conn, cfg, session)
     if sid and conn.era == "modern":
         arguments = _with_handle(conn, cfg, tool, arguments, sid)
         sid = None                          # there is no session header to route by
     result = conn.call(tool, arguments, session=sid)
+    opened = _window.park_new(getattr(ctx, "self_identity", None))
+    if opened:
+        result["opened_apps"] = opened
     if result.pop("is_error", False):
         # The server's own explanation, kept as the error so it reaches the
         # model as a sentence it can act on.

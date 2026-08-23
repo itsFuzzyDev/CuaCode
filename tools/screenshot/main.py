@@ -1,36 +1,13 @@
-import sys, io, base64, platform, importlib.util, threading
+import sys, io, base64, platform, threading
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
+
+from tools import _window
 
 from _grid import draw_grid
 from _session import save_screenshot
 
 OS = platform.system()
-
-_SIBLINGS = {}
-
-def _load_sibling_tool_module(tool_folder: str, filename: str):
-    """A tool module from another folder, loaded once per process.
-
-    Cached because this runs on the capture path: without it every screenshot
-    re-read and re-executed the file, which meant the window module's own
-    caches -- the Accessibility handles, the record of where a window was last
-    verified to be parked -- were thrown away between one capture and the next,
-    and the expensive first call was the only call there ever was.
-    """
-    key = (tool_folder, filename)
-    if key not in _SIBLINGS:
-        path = Path(__file__).parent.parent / tool_folder / filename
-        spec = importlib.util.spec_from_file_location(f"tools.{tool_folder}.{filename}", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _SIBLINGS[key] = mod
-    return _SIBLINGS[key]
-
-def _snap_module():
-    if OS == "Darwin": return _load_sibling_tool_module("app_open", "_open_macos.py")
-    elif OS == "Windows": return _load_sibling_tool_module("app_open", "_open_windows.py")
-    else: return _load_sibling_tool_module("app_open", "_open_linux.py")
 
 def _capture_module():
     if OS == "Darwin": import _capture_macos as m
@@ -74,9 +51,23 @@ def run(args: dict, ctx) -> dict:
     self_snapped = False
     if self_name:
         try:
-            self_snapped = _snap_module().snap_region(self_name, 0.0, 0.3, focus=False)
+            self_snapped = _window.park_self(self_name)
         except Exception:
             self_snapped = False
+
+    # The other half of the same guarantee, and the reason an app the agent
+    # started from the shell ends up parked at all: a process appears in the
+    # app list well before it has a window, so the launch that reported nothing
+    # new is caught here, on the call the agent makes right after opening
+    # something. Apps already parked are re-checked in the same pass -- they
+    # drift, restore saved frames, and resize themselves once a page loads --
+    # and a window still where it was put costs one geometry read.
+    opened = []
+    try:
+        opened = _window.park_new(self_name, focus=False)
+        _window.park_known(self_name)
+    except Exception:
+        pass
 
     plat = _capture_module()
     img = plat.capture()
@@ -142,6 +133,7 @@ def run(args: dict, ctx) -> dict:
     _archive(raw_copy, img, session_dir)
 
     out_meta = {"image_base64": b64, "width": lw, "height": lh, "grid_size": grid_size, "self_snapped": self_snapped}
+    if opened: out_meta["opened_apps"] = opened
     if region:
         # Straight from the crop box, not recomputed from the zoom: the two
         # roundings disagreed, and this is the number the agent uses to tell

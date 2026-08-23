@@ -28,6 +28,12 @@ step; waiting is cheaper than a round spent asking whether the answer arrived
 yet. The user can also push a command you are already waiting on into the
 background, in which case a call you expected output from returns a job id.
 
+A command that starts a GUI app gets that app parked on the right of the screen,
+the same way app_open would have, and the result names it under opened_apps. Some
+apps register too slowly to catch there; the next screenshot parks those. Use
+app_open when opening an app is the whole point — this is only a safety net for a
+launch that had to go through the shell.
+
 stdin is closed, so a command that would prompt fails instead of hanging —
 pass flags like -y rather than answering interactively. Output is capped and
 the middle is dropped when it is too long, so filter noisy commands (head,

@@ -1,6 +1,7 @@
 import os, platform, signal, subprocess, threading, time
 from pathlib import Path
 
+from tools import _window
 from tools._safety import shell as safety
 
 OUT_CAP = 20_000        # chars per stream, keeps a runaway command out of the model's context
@@ -137,6 +138,12 @@ def run(args: dict, ctx) -> dict:
 
     timeout = max(1.0, min(float(args.get("timeout") or DEFAULT_TIMEOUT), MAX_TIMEOUT))
     started = time.monotonic()
+    # What was on screen before the command ran. A shell command is a perfectly
+    # ordinary way to start a GUI app -- and for a browser an MCP server drives,
+    # the only way -- so anything that appears between here and the result is
+    # parked like an app_open would have parked it, instead of opening on top of
+    # the terminal the agent reads its own output from.
+    _window.baseline()
     # stdin closed: a command that would prompt fails immediately instead of
     # waiting on input nobody is there to give it.
     proc = subprocess.Popen(_argv(command), cwd=_cwd, stdin=subprocess.DEVNULL,
@@ -150,8 +157,15 @@ def run(args: dict, ctx) -> dict:
     out, cut_out = _cap(out)
     err, cut_err = _cap(err)
 
+    # Only the apps that were not running before this call, so a command that
+    # touched no window costs one list of running apps and moves nothing. An app
+    # whose window arrives later than its process -- most of them -- is caught
+    # on the screenshot path instead, which asks the same question again.
+    opened = _window.park_new(getattr(ctx, "self_identity", None))
+
     result = {"cwd": _cwd, "exit_code": proc.returncode, "stdout": out, "stderr": err,
               "duration": round(time.monotonic() - started, 2)}
+    if opened: result["opened_apps"] = opened
     if cut_out or cut_err: result["truncated"] = True
     if why == "timeout": result["timeout"] = True
     # Reported rather than raised, because a cancelled call still has whatever

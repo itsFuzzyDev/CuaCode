@@ -54,6 +54,29 @@ def _ax():
 _APPS = {}          # pid -> AXUIElement, so the app handle is built once
 
 
+def _pump():
+    """Let the workspace hear about launches that happened since the last look.
+
+    NSWorkspace's list of running applications is not a query, it is a cache
+    kept up to date by notifications -- and notifications are delivered on a run
+    loop. The agent's worker has none: it starts, imports this, and then spends
+    its life blocking on a socket. So runningApplications() answered with the
+    process list as it stood at import for the whole session, and an app the
+    agent launched a minute later was invisible to every lookup here -- which is
+    the whole of why an app opened from the shell was never seen, never snapped,
+    and reported as "no such app" when asked about directly.
+
+    Draining the loop with a zero timeout costs nothing when there is nothing
+    queued, which is the common case.
+    """
+    ax = _ax()
+    if not ax: return
+    try:
+        ax.Q.CFRunLoopRunInMode(ax.Q.kCFRunLoopDefaultMode, 0, False)
+    except Exception:
+        pass
+
+
 def _running(name: str):
     """The NSRunningApplication whose name matches, or None.
 
@@ -64,6 +87,7 @@ def _running(name: str):
     """
     ax = _ax()
     if not ax: return None
+    _pump()
     want = name.lower()
     for app in ax.ws.runningApplications():
         if (app.localizedName() or "").lower() == want: return app
@@ -483,3 +507,40 @@ def snap_region(proc_name: str | None, x_start_frac: float, x_end_frac: float, f
         return False
     except Exception:
         return False
+
+
+def gui_apps() -> dict[str, str]:
+    """{process name: the same name} for every app with a Dock presence.
+
+    The value is what snap_region takes here, which on macOS is the process
+    name -- callers hold a handle without caring what a handle is on this
+    platform.
+
+    Activation policy is the filter, not the window count: an app that is still
+    drawing its first window is exactly the app a caller wants to hear about,
+    while agents, daemons and menu bar extras never get a window at all and
+    would otherwise be reported as newly launched apps forever.
+    """
+    ax = _ax()
+    if ax:
+        try:
+            _pump()
+            out = {}
+            for app in ax.ws.runningApplications():
+                # NSApplicationActivationPolicyRegular: appears in the Dock.
+                if app.activationPolicy() != 0: continue
+                name = app.localizedName()
+                if name: out[name] = name
+            if out: return out
+        except Exception:
+            pass
+    rc, out = _osa('tell application "System Events" to get name of every application process '
+                   'whose background only is false')
+    if rc != 0: return {}
+    return {n.strip(): n.strip() for n in out.split(",") if n.strip()}
+
+
+def wait_for_window(proc_name: str, timeout: float = 8) -> bool:
+    """Public name for the settle wait, for callers that did not launch the app
+    themselves and so never went through open_app."""
+    return _wait_for_window(proc_name, timeout)
