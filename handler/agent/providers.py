@@ -435,6 +435,12 @@ class OpenAI:
             caps = ["completion"]
             if "image" in (arch.get("input_modalities") or []): caps.append("vision")
             if "tools" in params: caps.append("tools")
+            # Whether the effort knob does anything here. openrouter normalizes
+            # reasoning across its catalog and lists it per model, so this is
+            # the one openai-dialect endpoint that can be asked instead of
+            # guessed at -- and a model without it gets no rung that lies.
+            if {"reasoning", "reasoning_effort", "include_reasoning"} & set(params):
+                caps.append("thinking")
             return caps
         return None                     # unlisted model: not an answer either
 
@@ -793,29 +799,15 @@ def _serialize(tc):
 # whichever wire dialect that provider speaks.
 PROVIDERS = {
     "ollama":     Ollama(),
-    "openai":     OpenAI(),
+    "openai":     OpenAI("gpt-5.6-sol"),
     "anthropic":  Anthropic(),
-    # NIM speaks chat-completions, so it is the openai class again. The hosted
-    # catalog rotates: whatever model you point it at has to support both tool
-    # calling and images, or set vision=False and lose computer use.
-    "nvidia":     OpenAI("minimaxai/minimax-m3",
-                         "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
-    # Free tier, and the roster rotates -- check openrouter's current free list
-    # before trusting this default. Picked for tools *and* vision, which is the
-    # rare combination down there: a free model without tool calling cannot run
-    # this agent at all, and one without vision cannot do computer use.
-    # capabilities() reads openrouter's own catalog, so whatever model this ends
-    # up pointed at is asked rather than assumed.
-    "openrouter": OpenAI("google/gemma-4-31b-it:free", "https://openrouter.ai/api/v1",
-                         "OPENROUTER_API_KEY"),
-    "groq":       OpenAI("openai/gpt-oss-120b", "https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-    # vision=False rather than a comment about it: the whole deepseek-v4 line is
-    # text-only, so the cameras are withheld and describe_image is offered
-    # instead of every screenshot costing a turn to find that out.
-    "deepseek":   OpenAI("deepseek-v4-pro", "https://api.deepseek.com", "DEEPSEEK_API_KEY",
-                         vision=False),
+    "nvidia":     OpenAI("minimaxai/minimax-m3", "https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+    "openrouter": OpenAI("poolside/laguna-s-2.1:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", vision=False), # if you have money you can use better models. 
+    "deepseek":   OpenAI("DeepSeek-V4-Flash-Vision-Exp", "https://api.deepseek.com", "DEEPSEEK_API_KEY", vision=True),
     "together":   OpenAI("MiniMaxAI/MiniMax-M3", "https://api.together.xyz/v1", "TOGETHER_API_KEY"),
-    "lmstudio":   OpenAI("local-model", "http://localhost:1234/v1", "LMSTUDIO_API_KEY"),
+    "qubrain":    OpenAI("glm-5.2", "https://qubrain.org/v1", "QB_API_KEY")
+    # You can install local providers (including ollama local, litellm, all as long as they follow OpenAI schema )
+    #- the Ollama class though is set to CLOUD ONLY, if youd like to set ollama local or local models you can use openai schema on the localhost )
 }
 
 def get(name: str):
