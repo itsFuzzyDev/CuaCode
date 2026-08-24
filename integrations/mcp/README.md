@@ -3,21 +3,21 @@
 An MCP server is a separate program that exposes tools over the Model Context
 Protocol. CuaCode speaks to them as a client: it starts the server, asks what
 it offers, and calls it. That is how the agent reaches something this codebase
-does not implement — a desktop app, a database, an internal API — without a
+does not implement - a desktop app, a database, an internal API - without a
 tool folder being written for it.
 
 Two pieces live here. `client.py` is the protocol: JSON-RPC 2.0 over the
 server's stdin and stdout, or over HTTP, stdlib only, no new dependency.
-`loader.py` is the registry — which servers exist on this machine. The agent's
+`loader.py` is the registry - which servers exist on this machine. The agent's
 side is the `mcp` tool in `tools/mcp/`.
 
-    integrations/mcp/servers.json     ships with the app — empty
+    integrations/mcp/servers.json     ships with the app - empty
     ~/.cuacode/mcp/servers.json       yours; wins on a name collision
 
 The bundled file is empty and should stay that way unless a server is genuinely
 cross-platform and genuinely belongs to everyone. An MCP server is a local
-process running with your privileges, and a lot of them — the Spotify one below
-included — only make sense on one OS or one person's machine. Nothing runs by
+process running with your privileges, and a lot of them - the Spotify one below
+included - only make sense on one OS or one person's machine. Nothing runs by
 default because it happened to be committed.
 
 ## Registering one
@@ -46,11 +46,11 @@ without the wrapper also loads.
 | `env` | Extra environment variables, merged over the inherited ones. |
 | `cwd` | Working directory for the server process. |
 | `description` | One line, and the only thing about this server that is in the model's context by default. Write it for the model. |
-| `platform` | Optional. `darwin`, `linux`, `windows` — the server is not offered anywhere else. |
+| `platform` | Optional. `darwin`, `linux`, `windows` - the server is not offered anywhere else. |
 | `enabled` | `false` hides it without deleting the entry. |
 | `transport` | `stdio` (default) or `http`. With `http` the process is still launched here, and `url` is where it listens. |
 | `url` | The MCP endpoint, for `transport: "http"`. |
-| `protocol` | `auto` (default), `modern`, `legacy`, or a revision date like `2026-07-28` — see below. |
+| `protocol` | `auto` (default), `modern`, `legacy`, or a revision date like `2026-07-28` - see below. |
 | `session_tool` | The tool that mints a session handle. Default `session_new`. |
 | `session_argument` | The argument that carries a handle back to a stateless server. Default `session`. |
 
@@ -61,17 +61,17 @@ usable in the next one. No restart.
 
 MCP split in two at revision `2026-07-28`, and this client speaks both.
 
-**Legacy** — `2025-11-25` and earlier. The connection opens with an
+**Legacy** - `2025-11-25` and earlier. The connection opens with an
 `initialize` handshake, and the connection *is* a session: over HTTP the server
 names it with an `Mcp-Session-Id` header and routes by it.
 
-**Modern** — `2026-07-28`. Stateless. No handshake, no session header. Every
+**Modern** - `2026-07-28`. Stateless. No handshake, no session header. Every
 request carries its own protocol version, client identity and capabilities in
 `_meta`, so any instance can serve any request. A server that needs state
 across calls mints a handle and takes it back as an ordinary tool argument.
-Over HTTP a few body fields are mirrored into headers — `Mcp-Method`,
+Over HTTP a few body fields are mirrored into headers - `Mcp-Method`,
 `Mcp-Name`, `MCP-Protocol-Version`, and any parameter the tool's schema marks
-with `x-mcp-header` — and the server rejects the request if they disagree with
+with `x-mcp-header` - and the server rejects the request if they disagree with
 the body. A modern server may answer any request with an SSE stream instead of
 a JSON object; the client reads either.
 
@@ -81,7 +81,7 @@ prescribes: send `server/discover`, and treat anything that is not a
 `initialize`. Nothing has to be declared in the config for this to work.
 
 It costs something, though. A legacy server that answers unknown methods with
-an error — most of them, including the Spotify server here — is identified
+an error - most of them, including the Spotify server here - is identified
 instantly. One that ignores them costs `PROBE_TIMEOUT` (3s) once per session
 before the client gives up and falls back. `"protocol": "legacy"` skips the
 probe for such a server; `"protocol": "modern"` refuses to fall back, which is
@@ -101,13 +101,13 @@ and travels as a header, exactly as before. On a modern server there is no such
 header: the client calls `session_tool` once per run, keeps the handle it
 returns, and passes it as `session_argument` on any tool whose own input schema
 declares that argument. A server with no such tool, or a tool that does not
-take the argument, is called exactly as it would be otherwise — no handle is
+take the argument, is called exactly as it would be otherwise - no handle is
 invented.
 
 ## How the agent uses it
 
 The `mcp` tool has four actions: `list`, `load`, `call`, `stop`. Only the
-server names and their one-line descriptions are ever in context by default —
+server names and their one-line descriptions are ever in context by default -
 `load` is what spends context on one server's tool schemas, and `call` runs a
 tool.
 
@@ -121,7 +121,7 @@ so the interpreter launch and handshake are paid once, not per call.
 
 ## The Spotify server
 
-`servers/spotify/server.py` — controls the Spotify **desktop app** on macOS
+`servers/spotify/server.py` - controls the Spotify **desktop app** on macOS
 through AppleScript. No OAuth, no developer account, no network. It is not
 registered by default; add the block above to `~/.cuacode/mcp/servers.json`.
 
@@ -134,11 +134,11 @@ Sixteen tools:
 | | |
 |---|---|
 | `get_current_track` | name, artist, album, duration, position, a one-line summary |
-| `get_playback_state` | all of it at once — state, position, volume, shuffle, repeat, track |
+| `get_playback_state` | all of it at once - state, position, volume, shuffle, repeat, track |
 | `get_playback_position` | playhead, duration, time remaining |
 | `play` `pause` `playpause` | transport |
 | `next_track` `previous_track` | skip, and return what started playing |
-| `set_volume` `volume_up` `volume_down` | Spotify's own volume, 0–100, clamped |
+| `set_volume` `volume_up` `volume_down` | Spotify's own volume, 0-100, clamped |
 | `seek` | jump to a position, refused past the end of the track |
 | `set_shuffle` `set_repeat` | omit `enabled` to toggle |
 | `get_current_context` | see below |
@@ -147,7 +147,7 @@ Sixteen tools:
 Two things it cannot do, both the app's limits rather than this server's:
 
 **No playlist.** Spotify's scripting dictionary has no playlist or context
-property — the app publishes the track, not where the track came from.
+property - the app publishes the track, not where the track came from.
 `get_current_context` returns `available: false` with the reason in words, plus
 the album and track URL, rather than handing back the album and letting it be
 mistaken for the answer. Real playback context needs the Web API and a
@@ -162,7 +162,7 @@ all here, which is why none of this depends on it.
 
 ### Running it by hand
 
-Stdlib only, so any Python 3 works — no venv, no install.
+Stdlib only, so any Python 3 works - no venv, no install.
 
 ```bash
 python3 integrations/mcp/servers/spotify/server.py --selftest
@@ -181,7 +181,7 @@ printf '%s\n' \
 | python3 integrations/mcp/servers/spotify/server.py
 ```
 
-That is the legacy opening. A stateless server takes no handshake at all — the
+That is the legacy opening. A stateless server takes no handshake at all - the
 version and capabilities ride on every request:
 
 ```bash
@@ -215,11 +215,11 @@ hundred lines and is a reasonable thing to copy. A stateless one drops
 `initialize`, must answer `server/discover`, must put `"resultType":
 "complete"` on every result, and should read the version and capabilities out
 of each request's `_meta` rather than remembering them. Write whichever era you
-like — the client probes and adapts either way.
+like - the client probes and adapts either way.
 
 One rule that is easy to get wrong: **stdout carries protocol and nothing
 else.** A stray `print` is a parse error at the client. Send diagnostics to
-stderr — CuaCode keeps the last few lines and quotes them when a server dies,
+stderr - CuaCode keeps the last few lines and quotes them when a server dies,
 so that is where they are useful anyway.
 
 Report a tool's own failures as a result with `isError: true`, not as a

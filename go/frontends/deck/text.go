@@ -1,7 +1,7 @@
 package main
 
 // Inline formatting for the model's prose: a deliberately small subset of
-// markdown — fenced code, inline code, bold, italic, headings, bullets,
+// markdown - fenced code, inline code, bold, italic, headings, bullets,
 // quotes.
 //
 // Everything is parsed into styled spans and wrapped by the width of the text
@@ -42,7 +42,7 @@ func formatProse(text string, w int) [][]span {
 
 		if code {
 			// Code keeps its own whitespace, so it is truncated rather than
-			// wrapped — a re-flowed line of code is a lie about the code.
+			// wrapped - a re-flowed line of code is a lie about the code.
 			out = append(out, []span{{text: trunc(" "+line, w), style: sCode}})
 			continue
 		}
@@ -103,7 +103,7 @@ func blockLead(line string) (body string, prefix *span, hang int, base string) {
 }
 
 // parseInline splits a line on `code`, **bold** and *italic*. An unclosed
-// marker is left as literal text — half-typed emphasis is normal while a
+// marker is left as literal text - half-typed emphasis is normal while a
 // response is still streaming, and it must not restyle the rest of the line.
 func parseInline(s string) []span {
 	var (

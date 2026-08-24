@@ -3,7 +3,7 @@ package main
 // Decoding of the two tool payloads that reach the wire: the provider-native
 // tool_calls array on a `tool_calls` event, and the dispatch result on a
 // `tool_output` event. Both are rendered down to one short line each, because
-// the feed shows an action tape — what the agent did — not a JSON dump.
+// the feed shows an action tape - what the agent did - not a JSON dump.
 
 import (
 	"encoding/json"
@@ -30,7 +30,7 @@ type wireCall struct {
 
 // parseCalls turns a tool_calls payload into pending actions. The payload is
 // whatever the provider streamed, so anything unrecognized is kept visible
-// rather than dropped — a silent empty round would be worse than an ugly one.
+// rather than dropped - a silent empty round would be worse than an ugly one.
 func parseCalls(raw string) []act {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -184,7 +184,7 @@ func formatArgs(name string, m map[string]any) string {
 
 // resultText summarizes one tool_output payload into the short text for the
 // result column, the failure detail that earns its own row, and whether the
-// call succeeded — a dispatch failure comes back as {"error": ...} in place of
+// call succeeded - a dispatch failure comes back as {"error": ...} in place of
 // {"result": ...}.
 func resultText(name string, data json.RawMessage) (short, note string, ok bool) {
 	var payload struct {
@@ -246,7 +246,7 @@ func resultText(name string, data json.RawMessage) (short, note string, ok bool)
 		}
 
 	case "WebFetch", "skill":
-		// The worker keeps the page — or the skill's instructions — off the
+		// The worker keeps the page - or the skill's instructions - off the
 		// wire and sends the size instead, the same way it does for images and
 		// command output.
 		if n, found := number(inner, "chars"); found {
@@ -286,7 +286,7 @@ func resultText(name string, data json.RawMessage) (short, note string, ok bool)
 
 	case "shell":
 		// A non-zero exit is the command's own failure, not a dispatch error,
-		// so it never arrives as {"error": ...} — read it off the exit code.
+		// so it never arrives as {"error": ...} - read it off the exit code.
 		if killed, is := inner["timeout"].(bool); is && killed {
 			return "timeout", "", false
 		}

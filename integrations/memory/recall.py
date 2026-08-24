@@ -158,7 +158,7 @@ def block(text: str, sid: str = "", path: str = None, apps: list = None) -> str:
     try:
         for s, m in _memory_hits(q, path, apps):
             if len(lines) >= MAX_MEMORIES: break
-            if _fresh(sid, f"m:{m.name}"): lines.append(f"- memory `{m.name}` — {m.description}")
+            if _fresh(sid, f"m:{m.name}"): lines.append(f"- memory `{m.name}` - {m.description}")
     except Exception: pass
     n = 0
     try:
@@ -169,7 +169,7 @@ def block(text: str, sid: str = "", path: str = None, apps: list = None) -> str:
             where = "same directory" if (path and meta.get("cwd") and
                                          os.path.abspath(meta["cwd"]) == os.path.abspath(path)) else ""
             tail = ", ".join(x for x in (f"{meta.get('turns', 0)} turns", _ago(meta.get("updated", "")), where) if x)
-            lines.append(f"- session `{meta['id']}` \"{title}\" — {tail}")
+            lines.append(f"- session `{meta['id']}` \"{title}\" - {tail}")
             n += 1
     except Exception: pass
 

@@ -93,7 +93,7 @@ const usageReply = `{"sessions":41,"unmeasured":137,"since":"2026-07-14",
 "session":{"id":"20260811-120000-cc33","in":31000,"out":2000,"rounds":4}}`
 
 // The usage page is a feed block like any other and obeys the same width rule,
-// and it must never quietly drop the sessions nobody measured — unmeasured is
+// and it must never quietly drop the sessions nobody measured - unmeasured is
 // not the same as free.
 func TestUsagePageFitsAndDeclaresUnmeasured(t *testing.T) {
 	for w := 30; w <= 160; w += 7 {

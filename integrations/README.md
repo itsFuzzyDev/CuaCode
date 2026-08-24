@@ -8,7 +8,7 @@ fill. A **workflow** is a script that runs several of them in a fixed order. A
 All three load from two places: the ones here ship with the app, the ones in
 `~/.cuacode/` are yours, and a name collision goes to yours. Everything is
 re-read every turn, so a file written mid-conversation is usable in the next
-one — no restart.
+one - no restart.
 
     integrations/subagents/*.md      ~/.cuacode/subagents/*.md
     integrations/workflows/*.py      ~/.cuacode/workflows/*.py
@@ -16,11 +16,11 @@ one — no restart.
     integrations/mcp/servers.json    ~/.cuacode/mcp/servers.json
 
 A fourth way, `integrations/mcp/`, reaches tools this codebase did not write at
-all — see the section at the end.
+all - see the section at the end.
 
 ## Writing a subagent
 
-Frontmatter for the machine, body for the system prompt — the same shape a
+Frontmatter for the machine, body for the system prompt - the same shape a
 tool's `Description.md` uses.
 
 ```markdown
@@ -45,7 +45,7 @@ The system prompt. Say what done looks like and what not to do.
 ```
 
 `output` is what makes it callable code instead of prose. The agent is handed a
-`submit_result` tool built from that schema, and it is the only way back —
+`submit_result` tool built from that schema, and it is the only way back -
 anything else it writes is discarded. A failed validation returns to the agent
 as a tool result, so it corrects itself on the next round.
 
@@ -80,7 +80,7 @@ reach for the model first and the ladder second.
 
 Two things to keep in mind while writing the prompt. A subagent starts cold: it
 sees the prompt string and nothing else, not the conversation it came from. And
-it cannot ask anything — an underspecified job returns a confident wrong answer
+it cannot ask anything - an underspecified job returns a confident wrong answer
 rather than a question.
 
 ## Writing a workflow
@@ -102,13 +102,13 @@ def run(args):
 - `agent(name_or_spec, prompt, **overrides)` returns the agent's output alone,
   or `None` if it failed. Overrides are AgentSpec fields: `effort="high"`,
   `max_rounds=20`.
-- `pipeline(items, *stages)` runs each item through every stage independently —
+- `pipeline(items, *stages)` runs each item through every stage independently -
   no barrier, so one slow item does not hold up the rest. Stages are called
   `(previous, original_item, index)`.
 - `parallel(thunks)` is the barrier version. Use it only when a stage genuinely
   needs every earlier result at once: dedup across the whole set, an early exit
   on a count, a synthesis that compares findings to each other. "I need to
-  flatten the list first" is not that — flatten inside a stage.
+  flatten the list first" is not that - flatten inside a stage.
 - A failed agent or stage is `None` in the results, never an exception. Filter.
 - `MAX_AGENTS` (60) is a backstop against a loop whose exit condition never
   became true, not a budget.
@@ -135,7 +135,7 @@ the agent loads it. So fifty skills cost fifty lines, not fifty documents, and
 the description is the part that decides whether a skill is ever used.
 
 Two things can load it: the agent, through the `skill` tool, and the user,
-by typing `/<name>` — the palette lists every skill under the built-in
+by typing `/<name>` - the palette lists every skill under the built-in
 commands, and the instructions ride along with that message. Frontmatter can
 close either door:
 
@@ -149,8 +149,8 @@ that folder is dropped rather than listed as installed.
 
 ## Forcing a skill on
 
-A rule that has to be in force *before* the agent decides anything — a house
-style, a safety rule, an output format — cannot wait to be loaded. Asking for it
+A rule that has to be in force *before* the agent decides anything - a house
+style, a safety rule, an output format - cannot wait to be loaded. Asking for it
 in `AGENTS.md` ("always load the X skill") is unreliable by construction: the
 agent has to notice, decide and spend a call, and the turn it forgets is the
 turn the rule mattered. Mark it instead:
@@ -164,11 +164,11 @@ always: true
 ```
 
 Its body goes into the system prompt at startup, whole, in every conversation.
-It is dropped from the skill tool's list and from the palette — it is already
+It is dropped from the skill tool's list and from the palette - it is already
 there, and loading it again would only pay for it twice.
 
-To force on a skill you do not want to edit — a bundled one, which an update
-overwrites — name it in `~/.cuacode/config.json` instead:
+To force on a skill you do not want to edit - a bundled one, which an update
+overwrites - name it in `~/.cuacode/config.json` instead:
 
 ```json
 {"always_skills": ["cuacode", "housestyle"]}
@@ -184,7 +184,7 @@ short ones is a decision; six long ones is a window with no room left in it. The
 bodies are capped at 40k characters between them, and anything past that is
 named in the prompt rather than silently dropped.
 
-Other files in the folder — scripts, templates, reference tables — are listed
+Other files in the folder - scripts, templates, reference tables - are listed
 on load but not read. The body points at what to read and when; the agent gets
 the folder's absolute path back and reads or runs them itself. A deterministic
 script beats a paragraph asking the agent to be careful.
@@ -192,8 +192,8 @@ script beats a paragraph asking the agent to be careful.
 ## Registering an MCP server
 
 The other three extend the agent with things written here. An MCP server is a
-program written somewhere else entirely — a desktop app's controller, a
-database, an internal API — that exposes its own tools over the Model Context
+program written somewhere else entirely - a desktop app's controller, a
+database, an internal API - that exposes its own tools over the Model Context
 Protocol, and CuaCode talks to it as a client.
 
 ```json
@@ -209,7 +209,7 @@ collision, and the key is spelled the way Claude Desktop spells it so blocks
 paste between them.
 
 The agent sees a server's name and description, nothing more, until it loads
-one — same bargain as skills. `integrations/mcp/README.md` is the protocol, the
+one - same bargain as skills. `integrations/mcp/README.md` is the protocol, the
 config fields, and the bundled Spotify server as a worked example.
 
 The agent can write all three of these itself: the bundled `writing-subagents`,

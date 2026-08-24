@@ -280,7 +280,7 @@ def effort_block(level: str, name: str = None, model: str = None, cfg: dict = No
                         override=entry(name, cfg).get("effort_map")):
         return ""
     return (f"{model or name} cannot stop thinking, so \"off\" would quietly mean its "
-            f"lowest rung — pick that, or override effort_map[\"off\"] for {name}")
+            f"lowest rung - pick that, or override effort_map[\"off\"] for {name}")
 
 # Local-server probes, cached for the life of the process. Asking is cheap but
 # not free, and this is read on every turn to build the environment block.

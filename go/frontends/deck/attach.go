@@ -2,16 +2,16 @@ package main
 
 // The two doors a picture gets into a terminal through.
 //
-// A terminal cannot receive an image. What it can receive is a path — every
+// A terminal cannot receive an image. What it can receive is a path - every
 // mainstream terminal turns a file dropped on its window into the file's path,
-// typed or pasted into whatever was at the cursor — and a keystroke, which is
+// typed or pasted into whatever was at the cursor - and a keystroke, which is
 // how the clipboard gets read: the system clipboard holds the bytes, and the
 // terminal is not in that conversation at all.
 //
 // So: absorbPath watches the buffer for a path to an image that exists and
 // quietly takes it out of the text, and ctrl+v asks core/attach for whatever
 // the clipboard is holding. Reading a file, and reading the clipboard, are
-// both over there — the window does them too, and has to get the same answer.
+// both over there - the window does them too, and has to get the same answer.
 
 import (
 	"os"
@@ -119,7 +119,7 @@ func expand(path string) string {
 // This is the drop: the terminal has just typed or pasted a path where the
 // cursor was, and the only way to know it happened is to look at what is now
 // sitting there. Cheap because the extension is checked before the disk is,
-// and it runs where a path can have just ended — after a paste, and after a
+// and it runs where a path can have just ended - after a paste, and after a
 // keystroke that could have finished one.
 //
 // Reports whether anything was taken, and any reason a path that plainly was
@@ -157,7 +157,7 @@ func (m *model) absorbEndingAt(end, trail int) (bool, error) {
 
 	m.attach = append(m.attach, att)
 	// The path is taken out of the message. It was never text the user meant to
-	// send — it is the terminal's way of describing a drop — and leaving it
+	// send - it is the terminal's way of describing a drop - and leaving it
 	// behind would send the model a filename beside a picture of the file.
 	m.input = append(m.input[:start], m.input[end+trail:]...)
 	m.cursor = start

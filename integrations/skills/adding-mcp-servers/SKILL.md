@@ -1,6 +1,6 @@
 ---
 name: adding-mcp-servers
-description: Register or write an MCP server so CuaCode can reach tools this codebase does not implement — a desktop app, a database, a third-party server. Use when the user wants to add an MCP, asks why an MCP is not showing up, or asks what MCP servers they have.
+description: Register or write an MCP server so CuaCode can reach tools this codebase does not implement - a desktop app, a database, a third-party server. Use when the user wants to add an MCP, asks why an MCP is not showing up, or asks what MCP servers they have.
 ---
 An MCP server is a separate program exposing tools over the Model Context
 Protocol. CuaCode is the client: it starts the server, asks what it offers, and
@@ -19,7 +19,7 @@ program, or one person's machine.
 One file, and the user's copy is the one that matters:
 
 ```
-integrations/mcp/servers.json    ships with the app — empty, and stays empty
+integrations/mcp/servers.json    ships with the app - empty, and stays empty
 ~/.cuacode/mcp/servers.json      theirs; wins on a name collision
 ```
 
@@ -38,7 +38,7 @@ integrations/mcp/servers.json    ships with the app — empty, and stays empty
 
 | field | |
 |---|---|
-| `command` | The program. `python3`/`python` become the interpreter already running CuaCode, which certainly exists — a bare `python3` on a Mac with several installs is a coin toss. |
+| `command` | The program. `python3`/`python` become the interpreter already running CuaCode, which certainly exists - a bare `python3` on a Mac with several installs is a coin toss. |
 | `args` | Argument list. `~` is expanded. Use **absolute paths**; the server's working directory is not the repo. |
 | `env` | Extra environment variables, merged over inherited ones. Where an API key goes. |
 | `cwd` | Working directory for the server process. |
@@ -47,7 +47,7 @@ integrations/mcp/servers.json    ships with the app — empty, and stays empty
 | `enabled` | `false` hides it without deleting the entry. |
 
 The file is re-read every turn. A server registered mid-conversation works in
-the next one — never tell the user to restart.
+the next one - never tell the user to restart.
 
 **Do not add servers to the repo's `servers.json`.** It ships empty on purpose:
 an MCP server is a local process with the user's privileges, and most are
@@ -67,7 +67,7 @@ print(dispatch(reg, 'mcp', {'action': 'load', 'server': '<name>'}))"
 Or just call the `mcp` tool: `list` shows what is registered and whether it is
 up, `load` starts one and returns its tools.
 
-When it fails, the error carries the server's own stderr — that is where the
+When it fails, the error carries the server's own stderr - that is where the
 reason is. Usual causes: a relative path in `args`, a missing dependency in the
 interpreter that actually launched, or the server printing something to stdout.
 
@@ -116,7 +116,7 @@ Four rules worth more than the rest:
 
 - **stdout carries protocol and nothing else.** One stray `print` is a parse
   error at the client. Diagnostics go to stderr, which CuaCode keeps and quotes
-  when a server dies — so that is where they are useful anyway.
+  when a server dies - so that is where they are useful anyway.
 - **A tool's own failure is a result, not a JSON-RPC error.** Return
   `isError: true` with the reason in words. "Spotify is not running" is
   something the model can act on; a protocol error is something it can only
@@ -133,7 +133,7 @@ how you check it without a round trip.
 ## What the agent sees
 
 Only server names and their one-line descriptions, until `load` is called on
-one. That is deliberate — the same bargain skills make. So the `description` in
+one. That is deliberate - the same bargain skills make. So the `description` in
 the config, and each tool's own `description`, are doing real work: they are
 the entire basis for deciding whether the server gets loaded at all.
 

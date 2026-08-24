@@ -129,7 +129,7 @@ func WorkerPath() (string, error) {
 }
 
 // Start locates the worker, spawns it, and returns the live Session. notify is
-// called from the worker's reader goroutine — frontends should forward the
+// called from the worker's reader goroutine - frontends should forward the
 // event to their own loop rather than touch UI state directly.
 //
 // It also installs a SIGTERM/SIGHUP handler that closes the session, so the

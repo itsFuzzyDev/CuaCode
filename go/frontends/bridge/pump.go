@@ -19,16 +19,16 @@ import (
 )
 
 // view is the part of the window the pump touches. Narrowed to an interface so
-// the coalescing — the one piece of this frontend that can break without
-// anything looking wrong — can be tested without opening a window.
+// the coalescing - the one piece of this frontend that can break without
+// anything looking wrong - can be tested without opening a window.
 type view interface {
 	Eval(js string)
 	Dispatch(fn func())
 }
 
 // flushEvery is how long an event waits for company. Long enough that a fast
-// stream coalesces into meaningful chunks, short enough that a lone event —
-// the answer to a keystroke — still feels immediate.
+// stream coalesces into meaningful chunks, short enough that a lone event -
+// the answer to a keystroke - still feels immediate.
 const flushEvery = 24 * time.Millisecond
 
 // wireEvent is one worker event flattened for the page. It is deliberately the
@@ -46,7 +46,7 @@ type wireEvent struct {
 
 // batch is what one flush hands the page: everything that happened since the
 // last one, plus the state after all of it. The status goes once per batch
-// rather than once per event — the bar can only show the latest reading, and
+// rather than once per event - the bar can only show the latest reading, and
 // forty intermediate copies of it are forty copies the page has to skip.
 type batch struct {
 	Events  []wireEvent      `json:"events"`

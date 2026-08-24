@@ -18,7 +18,7 @@ from handler.agent.subagent import AgentSpec, run as run_agent
 SYSTEM = """You are looking at an image on behalf of a model that cannot see it.
 It asked one question. Answer that question.
 
-- Transcribe text exactly. Error messages, values, labels, filenames, code —
+- Transcribe text exactly. Error messages, values, labels, filenames, code -
   wrong by one character is wrong, and the model reading you has no way to
   check.
 - Say what is actually there. Not what an interface like this usually shows,

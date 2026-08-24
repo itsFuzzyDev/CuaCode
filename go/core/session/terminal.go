@@ -32,7 +32,7 @@ func ProbeTerminal() protocol.TerminalData {
 // go/ rather than wherever the user was. Set by that script, absent for a real
 // binary.
 //
-// Anything a frontend shows the user about "here" — a file picker, a path — has
+// Anything a frontend shows the user about "here" - a file picker, a path - has
 // to agree with what the worker was told, so both read it from here.
 func WorkingDir() string {
 	if wd := os.Getenv("CUACODE_CWD"); wd != "" {

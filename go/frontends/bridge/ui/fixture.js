@@ -2,7 +2,7 @@
 // own fixture has finished replaying by the time load fires, so a screenshot of
 // it is deterministic. See the demo block at the end of app.js.
 window.__FIXTURE = {
-  "note": "A scripted conversation for ?demo. It is not a mock of the UI: every entry is a real worker envelope, replayed through the same window.__cua.push the bridge uses, so what the page draws here is what it draws in the app. Keep it exercising one of everything — thinking, prose with markup, a batch of calls that partly fails, a notice, a dropped connection being retried, and the end of a round.",
+  "note": "A scripted conversation for ?demo. It is not a mock of the UI: every entry is a real worker envelope, replayed through the same window.__cua.push the bridge uses, so what the page draws here is what it draws in the app. Keep it exercising one of everything - thinking, prose with markup, a batch of calls that partly fails, a notice, a dropped connection being retried, and the end of a round.",
   "batches": [
     {
       "delay": 0,
@@ -77,7 +77,7 @@ window.__FIXTURE = {
       "events": [
         {
           "state": "thinking",
-          "token": "The user wants Notes open and three test names written into it. I should check what is on screen first rather than assuming Notes is closed — opening an app that is already frontmost costs a round and looks clumsy.\n\nSo: screenshot, then decide."
+          "token": "The user wants Notes open and three test names written into it. I should check what is on screen first rather than assuming Notes is closed - opening an app that is already frontmost costs a round and looks clumsy.\n\nSo: screenshot, then decide."
         }
       ]
     },
@@ -234,7 +234,7 @@ window.__FIXTURE = {
       "events": [
         {
           "state": "content",
-          "token": "Notes is open and the three names are written down.\n\nOne thing worth flagging: `TestMenuWrap` **still fails** when I ran it to confirm — exit 1, not a flake. The failure is in the wrap column, not the menu:\n\n```go\nif width < nameCol {\n\treturn narrowCalls(b, head)  // never reached at width 80\n}\n```\n\n- the guard uses `<` where the row needs `<=`\n- so an exactly-80-column terminal takes the wide path and overflows\n\nWant me to fix it, or leave it on the list?"
+          "token": "Notes is open and the three names are written down.\n\nOne thing worth flagging: `TestMenuWrap` **still fails** when I ran it to confirm - exit 1, not a flake. The failure is in the wrap column, not the menu:\n\n```go\nif width < nameCol {\n\treturn narrowCalls(b, head)  // never reached at width 80\n}\n```\n\n- the guard uses `<` where the row needs `<=`\n- so an exactly-80-column terminal takes the wide path and overflows\n\nWant me to fix it, or leave it on the list?"
         }
       ]
     },

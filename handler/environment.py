@@ -33,11 +33,11 @@ def _vision(settings: dict) -> list:
     helper = f"{found[0][0]}/{found[0][1] or config.model_for(found[0][0])}" if found else ""
     out = ["",
            "You cannot see images. This model does not accept them, so the screenshot and",
-           "photos tools are not offered to you — not missing, withheld, because sending an",
+           "photos tools are not offered to you - not missing, withheld, because sending an",
            "image to this model fails the whole turn."]
     if helper:
         out += ["The screen is still readable to you, through describe_image. That tool",
-                "captures the screen itself — you do not need a screenshot tool and you never",
+                "captures the screen itself - you do not need a screenshot tool and you never",
                 f"handle the image. It sends the picture to {helper}, which can see, and returns",
                 "a written answer to the one question you asked. Never tell the user you have",
                 "no way to look at something; use it, or say what it could not tell you.",
@@ -53,14 +53,14 @@ def _vision(settings: dict) -> list:
             "lands somewhere real and cannot be undone. Nothing would report that as an error,",
             "which is what makes it worse than a refused call, not better.",
             "",
-            "key and type_text you do still have. They take no coordinates — they go wherever",
-            "focus already is — so they are the one way you can drive anything. Confirm focus",
+            "key and type_text you do still have. They take no coordinates - they go wherever",
+            "focus already is - so they are the one way you can drive anything. Confirm focus",
             "with describe_image before typing something that matters, and confirm the result",
             "after. Keyboard-first paths (an app's own shortcuts, a launcher, tab order) are",
             "what work here; anything needing a pointer does not.",
             "",
             "So: you can read the screen and you can type. You cannot point at things. If the",
-            "user wants real computer use, say plainly that it needs a vision-capable model —",
+            "user wants real computer use, say plainly that it needs a vision-capable model -",
             "but do not overstate it into being unable to see or do anything at all."]
     return out
 

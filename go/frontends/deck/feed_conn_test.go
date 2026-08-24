@@ -13,7 +13,7 @@ func TestWindowTitle(t *testing.T) {
 	if got := windowTitle(""); got != "cuacode" {
 		t.Errorf("unnamed session: %q", got)
 	}
-	if got := windowTitle("  fix screenshot capture  "); got != "cuacode — fix screenshot capture" {
+	if got := windowTitle("  fix screenshot capture  "); got != "cuacode - fix screenshot capture" {
 		t.Errorf("named session: %q", got)
 	}
 	if got := windowTitle("two\nlines\x07here"); strings.ContainsAny(got, "\n\x07") {
@@ -49,7 +49,7 @@ func TestSessionTitleNoticedOnlyWhenChosen(t *testing.T) {
 }
 
 // A dropped connection says so twice: once while it is being retried, and once
-// at the end if it took the turn with it — including that what streamed before
+// at the end if it took the turn with it - including that what streamed before
 // it went is still there.
 func TestConnectionLostIsSaid(t *testing.T) {
 	m := initialModel()

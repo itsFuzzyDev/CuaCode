@@ -276,6 +276,6 @@ def write_index():
         by_scope.setdefault(m.scope, []).append(m)
     for scope, items in by_scope.items():
         lines.append(f"## {scope}")
-        lines += [f"- [{m.name}]({m.path.relative_to(root())}) — {m.description}" for m in items]
+        lines += [f"- [{m.name}]({m.path.relative_to(root())}) - {m.description}" for m in items]
         lines.append("")
     (root() / "MEMORY.md").write_text("\n".join(lines))

@@ -3,7 +3,7 @@ package main
 // Code, drawn as code.
 //
 // The permission prompt for a write or an edit is the one moment where what is
-// on screen is not the agent talking — it is a patch you are being asked to
+// on screen is not the agent talking - it is a patch you are being asked to
 // approve. A patch rendered as a grey paragraph gets clicked through; a patch
 // rendered as a patch gets read. So this is a small unified-diff renderer with
 // a small syntax highlighter behind it: line numbers off the hunk headers, a
@@ -13,7 +13,7 @@ package main
 // Deliberately small. It is a highlighter for eight-line hunks in a dialog, not
 // a parser: one line at a time, no state carried between them, and anything it
 // cannot account for is left as plain text rather than guessed at. Nothing here
-// is allowed to be slow or to be wrong in a way that changes what you approve —
+// is allowed to be slow or to be wrong in a way that changes what you approve -
 // the text is never altered, only coloured.
 
 import (
@@ -180,7 +180,7 @@ func wordStyle(word, lang string) string {
 
 // closingQuote finds the end of a quoted run, escapes included. An unterminated
 // quote runs to the end of the line rather than swallowing the next line's
-// styling — half-written strings are normal in a diff.
+// styling - half-written strings are normal in a diff.
 func closingQuote(s string, start int) int {
 	q := s[start]
 	for i := start + 1; i < len(s); i++ {
@@ -248,8 +248,8 @@ type diffLine struct {
 	new  int // ...and as it would be
 }
 
-// parseDiff reads a unified diff into rows. The file headers go — the prompt
-// already says which file this is — and the hunk headers become the line
+// parseDiff reads a unified diff into rows. The file headers go - the prompt
+// already says which file this is - and the hunk headers become the line
 // numbers the rows carry, which is the whole reason to read them.
 func parseDiff(diff string) []diffLine {
 	var (
@@ -277,7 +277,7 @@ func parseDiff(diff string) []diffLine {
 
 		case !inHnk:
 			// Anything before the first hunk that is not a header is the
-			// differ talking — the cap notice, usually.
+			// differ talking - the cap notice, usually.
 			if strings.TrimSpace(line) != "" {
 				out = append(out, diffLine{kind: 'x', text: line})
 			}
@@ -436,7 +436,7 @@ func contentRows(content, lang string, width int) []string {
 // coloured, and no patch markers, because nothing here is changing. It is what
 // a read comes back as, and what the halves of an edit are shown as.
 //
-// A read hands its lines back numbered — "12\tfunc main() {" — because the
+// A read hands its lines back numbered - "12\tfunc main() {" - because the
 // model needs the numbers to edit by them. Those numbers are the gutter here
 // rather than the first word of the code; text with none is numbered from one.
 func codeRows(content, lang string, width int) []string {
@@ -470,7 +470,7 @@ func numberedLine(line string) (int, string, bool) {
 
 // numbered reports whether a string is a read's numbered lines rather than
 // ordinary prose. It is what lets content be drawn as code for a file whose
-// extension says nothing — a Makefile, a log, a file with no suffix at all —
+// extension says nothing - a Makefile, a log, a file with no suffix at all -
 // without a web page's paragraphs being given line numbers they never had.
 func numbered(s string) bool {
 	line := s

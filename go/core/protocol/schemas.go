@@ -25,7 +25,7 @@ type CmdData struct {
 
 // Image is one attachment, as it crosses the wire: the file's name, and its
 // bytes base64'd. Base64 rather than raw because the wire is line-delimited
-// JSON, and the same encoding is what every provider wants at the other end —
+// JSON, and the same encoding is what every provider wants at the other end -
 // so nothing decodes it on the way through.
 type Image struct {
 	Name string `json:"name"`

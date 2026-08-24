@@ -24,7 +24,7 @@ func grow(n int) *model {
 
 // BenchmarkStreamToken is the hot path: one token arrives, the feed re-renders.
 // Reported per token, so a long message must not cost more per token than a
-// short one — that difference is what lag is made of.
+// short one - that difference is what lag is made of.
 func BenchmarkStreamToken(b *testing.B) {
 	for _, history := range []int{40, 400, 2000} {
 		b.Run("history="+itoa(history), func(b *testing.B) {

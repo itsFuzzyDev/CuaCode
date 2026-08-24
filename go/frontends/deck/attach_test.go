@@ -95,7 +95,7 @@ func TestAbsorbPath(t *testing.T) {
 }
 
 // Terminal.app ends a dropped path with a space, so that space is the moment
-// the drop is finished — and it goes with the path rather than being left as a
+// the drop is finished - and it goes with the path rather than being left as a
 // stray character in an empty message.
 func TestAbsorbPathEndedBySpace(t *testing.T) {
 	path := writePNG(t, t.TempDir(), "shot.png")

@@ -190,7 +190,7 @@ def docs_block(text: str, sid: str = "", path: str = "", first: bool = False) ->
 
     state["count"] += 1
     state["turn"] = turn
-    lines = [f"- {d['name']} ({_size(d['size'])})" + (" — large, grep it rather than reading it whole"
+    lines = [f"- {d['name']} ({_size(d['size'])})" + (" - large, grep it rather than reading it whole"
                                                       if d["size"] > HUGE else "")
              for d in unread]
     again = "still unread" if state["count"] > 1 else "not read yet"
@@ -200,7 +200,7 @@ def docs_block(text: str, sid: str = "", path: str = "", first: bool = False) ->
             f"happening in ({os.path.abspath(path)}). From the runtime, not the user, and\n"
             "nothing here has been read for you.\n"
             + "\n".join(lines) + "\n"
-            "Read the ones that bear on what was asked with the file tool — instructions for\n"
+            "Read the ones that bear on what was asked with the file tool - instructions for\n"
             "agents (AGENTS.md, CLAUDE.md, .cursorrules) before anything else, since they may\n"
             "change how you are supposed to work here. Ignore the rest silently: do not list\n"
             "them back, do not explain that you skipped them.\n"

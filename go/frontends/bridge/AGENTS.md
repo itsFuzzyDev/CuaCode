@@ -1,8 +1,8 @@
-# bridge — notes for whoever works on this next
+# bridge - notes for whoever works on this next
 
 The GUI frontend. Go owns the worker and nothing else; every pixel is HTML and CSS
 under `ui/`. If you are redesigning this from a mockup, the design is yours to
-change — the machine underneath it is not. This file is the machine.
+change - the machine underneath it is not. This file is the machine.
 
 Read `main.go`'s package comment first, then `pump.go`. They are short.
 
@@ -13,7 +13,7 @@ Read `main.go`'s package comment first, then `pump.go`. They are short.
 **No framework. No build step. No package manager.** `ui/` is three hand-written
 files loaded by `index.html`. There is no bundler, no `node_modules`, no `npm
 install`, no JSX, no TypeScript, no Tailwind. The whole UI ships inside a Go
-binary through `//go:embed ui` (`assets.go`) — anything that needs a build step
+binary through `//go:embed ui` (`assets.go`) - anything that needs a build step
 cannot get in there, and adding one turns a single `go build` into a toolchain.
 
 If a design tool hands you React and Tailwind, **treat it as a picture of the
@@ -43,7 +43,7 @@ worker (python, line-delimited JSON)
 ```
 
 `window.__cua.push` is the **single entry point**. Everything the page displays
-arrives through it. Nothing else may mutate the feed — not a timer, not a
+arrives through it. Nothing else may mutate the feed - not a timer, not a
 callback, not the demo. If you need a new thing on screen, it comes from a worker
 event, which means it comes through `fold()`.
 
@@ -58,7 +58,7 @@ The bindings are declared in `main.go`:
 | `goCancel()` | stop the run in flight |
 | `goBackground()` | background the running tool call |
 | `goCommand(action, fields)` | worker command (`session.list`, `session.load`, …) |
-| `goTitle(title)` | name the OS window — the webview does not follow `document.title` |
+| `goTitle(title)` | name the OS window - the webview does not follow `document.title` |
 | `goReply(id, type, fields)` | answer a worker prompt |
 | `goReady()` | the page can be evaluated into; flushes what was held |
 
@@ -73,7 +73,7 @@ These are the ones that break silently. Nothing on screen looks wrong until a
 session gets long, and then everything does.
 
 **1. Append, never re-render.** A streamed block owns one text node and grows by
-`textNode.appendData(chunk)`. Do **not** rebuild a block's markup per chunk —
+`textNode.appendData(chunk)`. Do **not** rebuild a block's markup per chunk -
 `innerHTML = render(...)` on every token is quadratic in the length of the
 message, which is exactly the lag that gets worse the more the model says. The
 one place markup is generated is `settleProse()`, once, after a message is
@@ -88,14 +88,14 @@ chunks of the same stream and `flushEvery` (24ms) is one batch. A 900-token
 answer reaches the page as ~40 scripts, not 900. `pump_test.go` guards this; if
 you change the merge, that test is the contract.
 
-**4. No idle work.** An idle window schedules nothing — no animation loop, no
+**4. No idle work.** An idle window schedules nothing - no animation loop, no
 polling, no interval. The one timer (`tickIfBusy`) starts when a batch of calls
 is open or the worker is busy, and stops when it is not. Keep it that way.
 
 **5. No `content-visibility: auto` on `.b`.** It was tried and removed. Skipping
 offscreen blocks needs `contain-intrinsic-size: auto <len>` to remember what each
 block measured; where that is unsupported, every offscreen block collapses to
-zero height, which keeps it offscreen — the feed empties itself the moment it
+zero height, which keeps it offscreen - the feed empties itself the moment it
 outgrows the window. The comment in `app.css` says so; do not put it back without
 testing a conversation taller than the viewport.
 
@@ -121,7 +121,7 @@ time that was:
 | bar green / red | how it ended |
 
 A failed run is findable by scrolling past its red. If you restyle this, keep the
-encoding — a colored line that does not mean anything is worse than no line.
+encoding - a colored line that does not mean anything is worse than no line.
 
 Note a block cannot paint outside itself, so the rail's continuity has to come
 from the scroller. That is why it is a background and not a pseudo-element.
@@ -130,7 +130,7 @@ The other structural claim in the design: **prose is a document, everything else
 is an instrument.** The agent's answers are serif at reading measure; thinking,
 tool rows, status and the user's own messages are mono. A message to an agent is
 a command, so it belongs to the instrument half. Change the faces if you like,
-keep the split — it is the fastest way to tell who is speaking.
+keep the split - it is the fastest way to tell who is speaking.
 
 ---
 
@@ -157,7 +157,7 @@ firefox --headless -no-remote --profile /tmp/ffprof \
   --window-size=1200,1000 --screenshot /tmp/shot.png "<url>?demo&fast"
 ```
 
-The `-no-remote --profile` part matters — Firefox refuses a second instance
+The `-no-remote --profile` part matters - Firefox refuses a second instance
 otherwise, and it fails by doing nothing rather than by saying so.
 
 **Look at the screenshot before you claim it works.** This is the whole reason
@@ -165,7 +165,7 @@ the GUI is HTML: three real bugs in this file's history were invisible in the
 diff and obvious in the picture. A prior toolkit attempt failed for exactly the
 lack of this.
 
-Also run `go test ./frontends/bridge/` — it covers the coalescing, the held-until-
+Also run `go test ./frontends/bridge/` - it covers the coalescing, the held-until-
 ready behaviour, and the batch JSON shape.
 
 Uncaught JS errors are written into the feed as a notice, because nobody can open
@@ -184,7 +184,7 @@ an inspector inside the app's window. If the feed stops growing, look there.
   session, a resumed session, a cancelled run, or a folded/unfolded pass. Extend
   it rather than testing by hand.
 - No packaging (`.app` / `.exe` / AppImage) and no native menus. `webview_go`
-  provides neither. If those become required, the UI ports to Wails untouched —
+  provides neither. If those become required, the UI ports to Wails untouched -
   that is the point of keeping the page free of Go-specific assumptions.
 - cgo, so cross-compiling needs a runner per OS. Linux needs WebKitGTK present.
 
@@ -203,7 +203,7 @@ ui/app.js     block model, fold(), rendering, tool decoding, the demo replay
 ui/fixture.js the scripted conversation ?demo replays
 ```
 
-`ui/app.js` mirrors `frontends/deck`'s block model deliberately — `fold`,
+`ui/app.js` mirrors `frontends/deck`'s block model deliberately - `fold`,
 `stream`, `boundary`, `openCalls`, `settle` and the tool-argument formatting are
 the same shapes as `deck/feed.go` and `deck/calls.go`. When the worker grows a
 new event or a new tool, change both, and read deck's version first: it is the

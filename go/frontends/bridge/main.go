@@ -2,15 +2,15 @@
 // action tape deck draws in a terminal, drawn in a window.
 //
 // The split is deliberate. Go owns the worker, the session, and nothing else;
-// every pixel is HTML and CSS under ui/. The host is the OS webview — WKWebView
-// on macOS, WebView2 on Windows, WebKitGTK on Linux — so there is no bundled
+// every pixel is HTML and CSS under ui/. The host is the OS webview - WKWebView
+// on macOS, WebView2 on Windows, WebKitGTK on Linux - so there is no bundled
 // browser and no second runtime to ship.
 //
 // Two rules keep it cheap. Events are coalesced before they cross into JS
 // (pump.go), and the page never re-renders a block it has already drawn
 // (ui/app.js). Everything else is ordinary DOM.
 //
-// Like every frontend it only talks to core/runner and core/session — see
+// Like every frontend it only talks to core/runner and core/session - see
 // go/frontends/deck for the terminal equivalent.
 package main
 
@@ -30,7 +30,7 @@ import (
 
 const appName = "CuaCode"
 
-const usage = `cuacode-bridge — GUI frontend
+const usage = `cuacode-bridge - GUI frontend
 
 usage:
   bridge [--resume [id]]
@@ -63,8 +63,8 @@ func main() {
 	// --serve is the frontend's own feedback loop. The page is the whole of the
 	// design, and a webview is a bad place to look at it from: nothing can open
 	// the inspector from outside, take a screenshot of it, or read what it drew.
-	// Served on its own it is an ordinary local page, so a browser — or anything
-	// driving one — can open it, and ?demo replays a scripted conversation
+	// Served on its own it is an ordinary local page, so a browser - or anything
+	// driving one - can open it, and ?demo replays a scripted conversation
 	// through the same entry point the worker uses. No Python, no window, and
 	// what you are looking at is the shipping UI rather than a mock of it.
 	if has(os.Args[1:], "--serve") {
@@ -95,8 +95,8 @@ func main() {
 
 	bind(w, sess, p)
 
-	// Asked for before the window opens, so the picker is already up — or the
-	// conversation already replaying — by the time the first frame is drawn.
+	// Asked for before the window opens, so the picker is already up - or the
+	// conversation already replaying - by the time the first frame is drawn.
 	switch {
 	case resume && resumeID != "":
 		p.loading = true
@@ -111,7 +111,7 @@ func main() {
 
 // bind exposes the session to the page. Every one of these runs on the UI
 // thread: they are all a JSON write to the worker's stdin, which is a buffered
-// pipe, so they are kept synchronous — a goroutine per call would buy nothing
+// pipe, so they are kept synchronous - a goroutine per call would buy nothing
 // and would let two messages sent in quick succession swap order.
 func bind(w webview.WebView, sess *session.Session, p *pump) {
 	must(w.Bind("goSend", func(text string) { sess.SendChat(text) }))
@@ -125,8 +125,8 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 	// The clipboard, read by the OS rather than by the page.
 	//
 	// A paste event is supposed to carry the picture in clipboardData, and in
-	// a browser it does. In a webview it frequently does not — WKWebView hands
-	// over an empty file list for an image copied by anything but itself — and
+	// a browser it does. In a webview it frequently does not - WKWebView hands
+	// over an empty file list for an image copied by anything but itself - and
 	// the page has no way to tell that apart from "there was no picture". So it
 	// asks here, and this is the same reader the terminal frontend uses, which
 	// is the point of it living in core.
@@ -143,8 +143,8 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 
 	// The window's own name, set from the page. The webview does not follow
 	// document.title on any of the three hosts, and the title is the only part
-	// of the app visible when it is not the front window — in a dock, in a task
-	// switcher, in a list of windows — which is exactly when "CuaCode" alone
+	// of the app visible when it is not the front window - in a dock, in a task
+	// switcher, in a list of windows - which is exactly when "CuaCode" alone
 	// stops being enough to tell two of them apart.
 	must(w.Bind("goTitle", func(title string) {
 		if title = strings.TrimSpace(title); title != "" {
@@ -154,7 +154,7 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 
 	// The page says when it can receive. Worker events that land before the
 	// first paint are held rather than evaluated into a document that does not
-	// exist yet — the worker's startup line always beats the page.
+	// exist yet - the worker's startup line always beats the page.
 	must(w.Bind("goReady", p.setReady))
 }
 

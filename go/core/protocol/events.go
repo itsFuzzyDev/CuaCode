@@ -16,7 +16,7 @@ type Event struct {
 	ContextUsed int    // tokens spent, -1 if not reported
 	ContextMax  int    // size of the model's window, -1 if not known
 
-	// What the round generated, and how fast — live from characters while it is
+	// What the round generated, and how fast - live from characters while it is
 	// still arriving, then again from the provider's own count once the round is
 	// billed. -1 where the worker said nothing: a provider that reports no usage
 	// reports none of this either, and a zero would read as a measurement rather
