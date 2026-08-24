@@ -1,7 +1,10 @@
 import hashlib
 from pathlib import Path
 
-IMAGE_KEYS = ("image_base64", "images")
+# "b64" is the attachment shape: a user turn records its images as
+# {"name": ..., "b64": ...} so the filename survives a reload, and the payload
+# is the same megabyte of base64 a screenshot is.
+IMAGE_KEYS = ("image_base64", "images", "b64")
 
 # Images live outside messages.jsonl: a screenshot is ~0.5-2MB of base64 and
 # stays in history forever, so inlining would mean re-reading tens of

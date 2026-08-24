@@ -8,7 +8,11 @@
 //
 //	ctrl+t  expand thinking         esc     stop the run in flight
 //	tab     collapse tool calls     ctrl+b  background the running tool call
-//	ctrl+c  quit
+//	ctrl+v  attach the clipboard    ctrl+c  quit
+//
+// Images ride along with a message: drop a file on the window and the path the
+// terminal types becomes an attachment, or press ctrl+v to take whatever
+// picture the system clipboard is holding. attach.go is both doors.
 package main
 
 import (
@@ -28,6 +32,14 @@ import (
 // previous busy period.
 type spinTickMsg struct{ ID int }
 
+// clipMsg is the clipboard, read. It is a message rather than a return value
+// because reading it runs a program, and that has to happen off the goroutine
+// drawing the screen.
+type clipMsg struct {
+	att attachment
+	err error
+}
+
 type model struct {
 	sess   *session.Session
 	status session.Snapshot // refreshed on every session event
@@ -43,6 +55,11 @@ type model struct {
 
 	input  []rune
 	cursor int // rune index into input
+
+	// Pictures riding on the message being typed. They live beside the buffer
+	// rather than in it: a path is how a terminal describes a drop, not
+	// something the user meant to say, and the bytes were never text at all.
+	attach []attachment
 
 	width, height int
 
@@ -260,18 +277,23 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 // would start is the one already running, and resetting its clock or reopening
 // its call group would report the wrong thing about it.
 func (m *model) send(text string) tea.Cmd {
-	m.sess.SendChat(text)
+	// Taken from the model here rather than by the caller, so there is one
+	// place a message is emptied of them and no path can send the same picture
+	// twice.
+	files := m.attach
+	m.attach = nil
+	m.sess.SendChatWith(text, wire(files))
 	m.status = m.sess.Snapshot()
 
 	if m.running {
-		m.push(&block{kind: kUser, text: text})
+		m.push(&block{kind: kUser, text: text, files: names(files)})
 		m.rebuild()
 		return nil
 	}
 
 	m.closeCalls()
 	m.callCount, m.callFail = 0, 0
-	m.push(&block{kind: kUser, text: text})
+	m.push(&block{kind: kUser, text: text, files: names(files)})
 	m.rebuild()
 
 	m.running, m.runStart = true, time.Now()
@@ -334,6 +356,16 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showThinking = !m.showThinking
 		m.rebuild()
 
+	// The terminal's own paste key cannot carry a picture — Cmd+V hands over
+	// the clipboard's *text*, which for an image is nothing — so reading the
+	// real clipboard needs a key of our own. Off the UI goroutine: it shells
+	// out, and a clipboard that takes a moment must not stop the screen.
+	case msg.Code == 'v' && ctrl:
+		return m, func() tea.Msg {
+			att, err := readClipboard()
+			return clipMsg{att: att, err: err}
+		}
+
 	// Shift+Tab is the opposite of Tab, and reads as it: one takes the batch
 	// down to a line, the other opens every call in it out to its arguments.
 	// It arrives as \x1b[Z, which every mainstream terminal sends.
@@ -360,7 +392,10 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case msg.Code == tea.KeyEnter:
 		text := strings.TrimSpace(string(m.input))
-		if text == "" {
+		// A message that is nothing but a picture is a message: dropping a
+		// screenshot in and pressing enter is the whole of what someone wants
+		// to say about it often enough.
+		if text == "" && len(m.attach) == 0 {
 			break
 		}
 		m.input, m.cursor = m.input[:0], 0
@@ -376,8 +411,19 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case msg.Code == tea.KeySpace:
 		m.insert(' ')
+		// The space is how a path typed by a terminal ends — Terminal.app puts
+		// one after every dropped file — so it is where a drop is finished
+		// enough to look at, and it goes with the path when one is found.
+		m.absorbTypedAt(m.cursor-1, 1)
 
 	case msg.Code == tea.KeyBackspace:
+		// With nothing left to delete, backspace takes the last picture off
+		// instead. It is where the hand already is, and an attachment added by
+		// accident otherwise has no way off the message at all.
+		if m.cursor == 0 && len(m.attach) > 0 {
+			m.attach = m.attach[:len(m.attach)-1]
+			break
+		}
 		if m.cursor > 0 {
 			m.input = append(m.input[:m.cursor-1], m.input[m.cursor:]...)
 			m.cursor--
@@ -429,9 +475,32 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	default:
 		if msg.Text != "" && !ctrl && !alt {
 			m.insert([]rune(msg.Text)...)
+			// A terminal that types a drop rather than pasting it arrives here,
+			// one character at a time, and the path is only a path once the
+			// character that ends it lands. Nothing touches the disk unless the
+			// buffer ends in an image extension, so the usual keystroke costs a
+			// string compare.
+			m.absorbTyped()
 		}
 	}
 	return m, nil
+}
+
+// absorbTyped takes a just-completed image path off the buffer, and says so.
+// Shared by the two ways one arrives — typed by a terminal that does not use
+// bracketed paste, and pasted by one that does.
+func (m *model) absorbTyped() { m.absorbTypedAt(m.cursor, 0) }
+
+func (m *model) absorbTypedAt(end, trail int) {
+	took, err := m.absorbEndingAt(end, trail)
+	if err != nil {
+		m.notice(cWarn, err.Error())
+		m.rebuild()
+		return
+	}
+	if took {
+		m.rebuild()
+	}
 }
 
 // handleInspectKey drives the open call: up and down through it, left and right
@@ -695,9 +764,37 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.PasteMsg:
+		// A file dropped on the window arrives here in most terminals: as the
+		// path, pasted. Tried as paths first, and only as text when every word
+		// in it is not one — a paste that is mostly prose is prose.
+		if atts, err := absorbPaste(msg.Content); err != nil {
+			m.notice(cWarn, err.Error())
+			m.rebuild()
+			return m, nil
+		} else if len(atts) > 0 {
+			m.attach = append(m.attach, atts...)
+			m.rebuild()
+			return m, nil
+		}
 		// Bracketed paste arrives whole. Newlines would submit a line at a
 		// time, so they fold into spaces and the paste stays one message.
 		m.insert([]rune(flattenPaste(msg.Content))...)
+		// A path can also be pasted into the middle of a sentence — dropped on
+		// a window with something already typed in it — which the all-or-
+		// nothing read above deliberately does not take.
+		m.absorbTyped()
+
+	case clipMsg:
+		switch {
+		case msg.err == nil:
+			m.attach = append(m.attach, msg.att)
+		// Said out loud rather than swallowed: ctrl+v with a line of text on
+		// the clipboard is the most likely press there is, and a key that
+		// appears to do nothing reads as a broken one.
+		default:
+			m.notice(cWarn, msg.err.Error())
+		}
+		m.rebuild()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

@@ -683,7 +683,35 @@ func (m *model) inputLines() (lines [][]rune, row, col int) {
 // push the feed off the screen.
 func (m *model) inputHeight() int {
 	lines, _, _ := m.inputLines()
-	return min(max(len(lines), 1), maxInputRows)
+	return min(max(len(lines), 1), maxInputRows) + len(m.trayRows())
+}
+
+// trayRows is what is attached to the message being typed, drawn above it.
+// Above rather than inline, because the pictures are not part of the sentence
+// and a message can be nothing but pictures.
+//
+// One row for one attachment, so the name is readable; a count once there are
+// enough that the names would be what pushes the feed off the screen.
+func (m *model) trayRows() []string {
+	if len(m.attach) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString(margin)
+	b.WriteString(strings.Repeat(" ", vw(inputMark)))
+	if len(m.attach) > 3 {
+		b.WriteString(paint(cUser, fmt.Sprintf("▣ %d images", len(m.attach))))
+		b.WriteString(paint(cGhost, "  ·  backspace to drop the last"))
+		return []string{b.String()}
+	}
+	for i, a := range m.attach {
+		if i > 0 {
+			b.WriteString(paint(cFaint, sep))
+		}
+		b.WriteString(paint(cUser, "▣ ") + paint(cMuted, a.Name))
+		b.WriteString(paint(cGhost, " "+fmtBytes(a.Size)))
+	}
+	return []string{b.String()}
 }
 
 const maxInputRows = 6
@@ -697,6 +725,7 @@ func (m *model) renderInput() []string {
 	if m.insp.on {
 		return m.inspectKeys()
 	}
+	rows := m.trayRows()
 	lines, curRow, curCol := m.inputLines()
 
 	start := 0
@@ -707,7 +736,6 @@ func (m *model) renderInput() []string {
 		}
 	}
 
-	rows := make([]string, 0, maxInputRows)
 	for i := start; i < len(lines) && i-start < maxInputRows; i++ {
 		var b strings.Builder
 		b.WriteString(margin)
@@ -850,9 +878,13 @@ func (m *model) layout() (feedH int, overlay, input []string) {
 		case len(overlay) > 0:
 			overlay = overlay[:len(overlay)-1]
 		case len(input) > 1:
-			input = input[:len(input)-1]
+			// From the top: the last row is the one the cursor is most likely
+			// on, and above it sit the attachment tray and the earliest
+			// wrapped lines — the parts of the message already written.
+			input = input[1:]
 		default:
-			return 1, nil, input[:1]
+			// The row with the cursor on it, for the same reason.
+			return 1, nil, input[len(input)-1:]
 		}
 	}
 	return m.height - fixed - len(overlay) - len(input), overlay, input

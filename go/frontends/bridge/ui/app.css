@@ -426,6 +426,93 @@ html, body {
 }
 #input::placeholder { color: var(--ink-mute); opacity: 0.55; }
 
+/* ====================================================== what is attached */
+
+/* The tray sits between the status line and the prompt, because that is the
+   order it reads in: what this machine is doing, what is riding on the next
+   message, then the message. Chips rather than a list — an attachment is one
+   object, and the thumbnail is the only part of it worth space. */
+.tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 5px;
+  border: 1px solid var(--rail);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 11px;
+  color: var(--ink-dim);
+  max-width: 240px;
+}
+.chip img {
+  width: 26px;
+  height: 26px;
+  object-fit: cover;
+  border-radius: 2px;
+  display: block;
+}
+.chip .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.chip .size { color: var(--ink-mute); }
+
+/* A button, because it does something. Kept quiet until the chip is under the
+   pointer: the tray is read far more often than it is edited. */
+.chip .x {
+  border: 0;
+  background: none;
+  color: var(--ink-mute);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.chip:hover .x, .chip .x:focus-visible { opacity: 1; }
+.chip .x:hover { color: var(--fail); }
+
+/* The window while a file is over it. A border rather than an overlay: an
+   overlay would cover the conversation the file is being dropped into. */
+body.dropping .entry { border-top-color: var(--you); }
+body.dropping .caret { color: var(--you); }
+
+/* What a sent message carried. Same thumbnails, on the human's side of the
+   rail, so a picture reads as part of what was said rather than as something
+   the agent produced. */
+.b.user .shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.b.user .shots img {
+  max-width: 190px;
+  max-height: 150px;
+  border-radius: 3px;
+  border: 1px solid var(--rail);
+  display: block;
+}
+/* A reopened conversation gets the names back and not the pictures — the
+   worker does not re-send megabytes to redraw a thumbnail — so the name is
+   what stands in for one. */
+.b.user .shots .named {
+  font-size: 11px;
+  color: var(--ink-dim);
+  border: 1px solid var(--rail);
+  border-radius: 3px;
+  padding: 4px 7px;
+}
+
 /* ============================================================== responsive */
 
 @media (max-width: 620px) {

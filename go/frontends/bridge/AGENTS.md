@@ -53,6 +53,8 @@ The bindings are declared in `main.go`:
 | binding | does |
 |---|---|
 | `goSend(text)` | send a user message |
+| `goSendWith(text, images)` | the same, with `[{name, b64}]` attached |
+| `goClipboard()` | → the picture on the system clipboard, or a rejection |
 | `goCancel()` | stop the run in flight |
 | `goBackground()` | background the running tool call |
 | `goCommand(action, fields)` | worker command (`session.list`, `session.load`, …) |

@@ -40,7 +40,13 @@ def to_messages(records: list[dict], provider: str, native_ok: bool = True,
         t = rec.get("t")
         if t == "user":
             flush()
-            msgs.append({"role": "user", "content": rec.get("text", "")})
+            attached = rec.get("images") or []
+            turn = p.user_message(rec.get("text", ""), [i.get("b64", "") for i in attached])
+            # Rebuilt from the record, exactly as the live path builds it from
+            # the message: same helper, same source, so a reopened turn is the
+            # one that was sent.
+            providers.append_user_text(turn, providers.attachment_note(attached))
+            msgs.append(turn)
         elif t == "recall":
             # Folded into the user turn it was attached to rather than sent as
             # its own message: anthropic rejects two user messages in a row, and
@@ -49,8 +55,11 @@ def to_messages(records: list[dict], provider: str, native_ok: bool = True,
             # path exactly -- if it somehow is not, it stands alone rather than
             # attaching itself to an assistant turn.
             flush()
-            if msgs and msgs[-1].get("role") == "user" and isinstance(msgs[-1].get("content"), str):
-                msgs[-1]["content"] += "\n\n" + rec.get("text", "")
+            if msgs and msgs[-1].get("role") == "user":
+                # append_user_text rather than a concatenation: a user turn with
+                # an attachment on it holds its words in a content block, not in
+                # a string, and the note belongs in that block.
+                providers.append_user_text(msgs[-1], rec.get("text", ""))
             else:
                 msgs.append({"role": "user", "content": rec.get("text", "")})
         elif t == "assistant":

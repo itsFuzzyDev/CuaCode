@@ -13,6 +13,7 @@
 
 const feed   = document.getElementById('feed');
 const input  = document.getElementById('input');
+const tray   = document.getElementById('tray');
 const statusEl = document.getElementById('status');
 
 // --------------------------------------------------------------- the model
@@ -27,6 +28,7 @@ let showThink  = false;
 let foldCalls  = false;
 let pinned     = true;  // stick to the bottom unless the user has scrolled away
 let runStart   = 0;
+let pending    = [];    // pictures attached to the message being typed
 
 const TOOL_DRIVE = new Set(['click', 'type_text', 'key', 'scroll', 'mouse_move']);
 const TOOL_LOOK  = new Set(['screenshot', 'photos', 'app_list']);
@@ -169,6 +171,9 @@ function reset() {
   feed.replaceChildren();
   status.ContextUsed = 0;
   status.ContextLeft = 0;
+  // Attached to a message in a conversation that is no longer on screen.
+  pending = [];
+  drawTray();
   push('hint');
 }
 
@@ -193,7 +198,10 @@ function fold(ev, loading) {
     case 'user':
       boundary();
       closeCalls();
-      push('user', { text: ev.token || '' });
+      // Names only on this path: a reopened conversation is replayed without
+      // the payloads, so there is nothing to draw but what the files were
+      // called. See main.py's replay().
+      push('user', { text: ev.token || '', shots: (ev.images || []).map(i => ({ name: i.name })) });
       break;
 
     case 'thinking':
@@ -359,6 +367,7 @@ function build(b) {
   switch (b.kind) {
     case 'user':
       b.textNode = el.appendChild(document.createTextNode(b.text || ''));
+      if (b.shots && b.shots.length) el.appendChild(shotsOf(b.shots));
       break;
 
     case 'prose': {
@@ -410,6 +419,7 @@ function build(b) {
             '<kbd>enter</kbd> send &nbsp;·&nbsp; <kbd>shift+enter</kbd> newline &nbsp;·&nbsp; <kbd>esc</kbd> stop<br>' +
             '<kbd>ctrl+t</kbd> thinking &nbsp;·&nbsp; <kbd>tab</kbd> fold calls &nbsp;·&nbsp; <kbd>ctrl+b</kbd> background' +
           '</dd>' +
+          '<dt>images</dt><dd>drop a file on the window, or paste one</dd>' +
         '</dl>';
       break;
   }
@@ -573,6 +583,186 @@ function span(cls, text) {
   return s;
 }
 
+// --------------------------------------------------------- what is attached
+
+// A window can take a picture two ways a terminal cannot: a file dropped on it,
+// and a real clipboard paste. Both arrive as File objects, both end in the same
+// list, and the list is what send() puts on the wire.
+
+const MAX_IMAGE = 8 << 20;   // deck/attach.go's cap, for the same reason
+const KINDS = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+// attach reads files onto the next message. Asynchronous because reading one
+// is, and awaited together so several dropped at once keep their order rather
+// than racing into whatever order they finish in.
+async function attach(files) {
+  const wanted = [...files].filter(f => KINDS.has(f.type));
+  if (!wanted.length) {
+    if (files.length) notice('warn', 'not an image: png, jpeg, gif or webp only');
+    return;
+  }
+  for (const f of wanted) {
+    if (f.size > MAX_IMAGE) {
+      notice('warn', f.name + ' is ' + fmtBytes(f.size) + ' — the limit is ' + fmtBytes(MAX_IMAGE));
+      continue;
+    }
+    try {
+      pending.push({ name: f.name || 'clipboard.png', mime: f.type, size: f.size, b64: await b64of(f) });
+    } catch (e) {
+      notice('err', 'could not read ' + (f.name || 'that file') + ': ' + e);
+    }
+  }
+  drawTray();
+}
+
+// b64of reads a File as base64. Through a data URL because that is the only
+// reader every one of the three webviews implements the same way; the prefix
+// is cut because the wire and the providers both want the payload alone.
+function b64of(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(r.error);
+    r.onload = () => resolve(String(r.result).split(',', 2)[1] || '');
+    r.readAsDataURL(file);
+  });
+}
+
+function fmtBytes(n) {
+  if (n >= (1 << 20)) return (n / (1 << 20)).toFixed(1) + 'MB';
+  if (n >= (1 << 10)) return Math.round(n / (1 << 10)) + 'KB';
+  return n + 'B';
+}
+
+function dataURL(a) { return 'data:' + (a.mime || 'image/png') + ';base64,' + a.b64; }
+
+// drawTray redraws the chips. The one place in the app that rebuilds rather
+// than appends, and allowed to: the tray holds a handful of items, it is not
+// in the feed, and it changes only when a person adds or removes one.
+function drawTray() {
+  tray.hidden = pending.length === 0;
+  if (tray.hidden) { tray.replaceChildren(); return; }
+
+  const frag = document.createDocumentFragment();
+  pending.forEach((a, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+
+    const img = document.createElement('img');
+    img.src = dataURL(a);
+    img.alt = '';
+    chip.appendChild(img);
+    chip.appendChild(span('name', a.name));
+    chip.appendChild(span('size', fmtBytes(a.size)));
+
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.type = 'button';
+    x.textContent = '×';
+    x.title = 'remove ' + a.name;
+    x.addEventListener('click', () => { pending.splice(i, 1); drawTray(); input.focus(); });
+    chip.appendChild(x);
+
+    frag.appendChild(chip);
+  });
+  tray.replaceChildren(frag);
+}
+
+// shotsOf is the same pictures once the message is sent, drawn in the feed.
+// A replayed turn has names and no payload, so a name is what it gets.
+function shotsOf(shots) {
+  const box = document.createElement('div');
+  box.className = 'shots';
+  for (const a of shots) {
+    if (!a.b64) { box.appendChild(span('named', '▣ ' + (a.name || 'image'))); continue; }
+    const img = document.createElement('img');
+    img.src = dataURL(a);
+    img.alt = a.name || '';
+    img.title = a.name || '';
+    box.appendChild(img);
+  }
+  return box;
+}
+
+// A file dropped anywhere on the window lands on the next message. Anywhere,
+// because the target of the gesture is the conversation and not a rectangle in
+// it — and preventDefault on both events, because a webview's default answer to
+// a dropped file is to navigate the window to it, which ends the session.
+document.addEventListener('dragover', e => {
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  document.body.classList.add('dropping');
+});
+document.addEventListener('dragleave', e => {
+  // Only the one that leaves the window itself: dragging across the gaps
+  // between elements fires this constantly.
+  if (!e.relatedTarget) document.body.classList.remove('dropping');
+});
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  document.body.classList.remove('dropping');
+  if (e.dataTransfer && e.dataTransfer.files.length) attach(e.dataTransfer.files);
+});
+
+// A paste with a picture in it is an attachment; a paste with text in it is
+// text, and is left to the textarea to handle as it always did.
+//
+// Two ways, because one of them is not reliable here. A browser puts the
+// picture in clipboardData and this is over in a line. A webview often does
+// not — WKWebView hands over an empty file list for an image copied by
+// anything but itself — and an empty event is indistinguishable from an
+// ordinary text paste. So when the event carries nothing, Go is asked, using
+// the same OS-level reader the terminal frontend uses.
+document.addEventListener('paste', e => {
+  const files = imagesIn(e.clipboardData);
+  if (files.length) {
+    e.preventDefault();
+    attach(files);
+    return;
+  }
+  // Deliberately not preventDefault'd: if there turns out to be no picture,
+  // this was a text paste and it has to land in the box like any other.
+  askClipboard();
+});
+
+// A window with focus anywhere but the textarea gets no paste event at all in
+// some webviews, so the keystroke is watched too. askClipboard is idempotent
+// for one clipboard, so the two firing together costs a second read and
+// attaches once.
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) askClipboard();
+});
+
+// imagesIn pulls pictures out of a clipboard event, both ways one can be in
+// there: as a file list, and as items that have to be asked for one at a time.
+function imagesIn(cd) {
+  if (!cd) return [];
+  const out = [...(cd.files || [])].filter(f => KINDS.has(f.type));
+  if (out.length) return out;
+  for (const it of cd.items || []) {
+    if (it.kind !== 'file' || !KINDS.has(it.type)) continue;
+    const f = it.getAsFile();
+    if (f) out.push(f);
+  }
+  return out;
+}
+
+// askClipboard reads the system clipboard through Go and attaches whatever
+// picture is on it. A rejection means there was not one, which is what most
+// pastes are and is not worth saying anything about.
+//
+// The same picture is never attached twice: the two triggers above can both
+// fire for one keypress, and a clipboard read is by definition repeatable.
+async function askClipboard() {
+  if (typeof window.goClipboard !== 'function') return;
+  try {
+    const img = await window.goClipboard();
+    if (!img || !img.b64) return;
+    if (pending.some(a => a.b64 === img.b64)) return;
+    pending.push({ name: img.name, mime: img.mime || 'image/png', size: img.size, b64: img.b64 });
+    drawTray();
+  } catch { /* nothing on the clipboard that is a picture */ }
+}
+
 // --------------------------------------------------------------- the input
 
 input.addEventListener('input', () => {
@@ -602,7 +792,12 @@ document.addEventListener('keydown', e => {
 
 function send() {
   const text = input.value.trim();
-  if (!text) return;
+  // A message that is nothing but a picture is a message: drop a screenshot in,
+  // press enter.
+  if (!text && !pending.length) return;
+  const shots = pending;
+  pending = [];
+  drawTray();
   input.value = '';
   input.style.height = 'auto';
 
@@ -615,10 +810,13 @@ function send() {
     callFail = 0;
     runStart = performance.now();
   }
-  push('user', { text });
+  push('user', { text, shots });
   settleProse();
   scrollToBottom();
-  go('goSend', text);
+  // goSend when there is nothing attached, so the common message crosses the
+  // binding it always did and a page talking to an older build still works.
+  if (shots.length) go('goSendWith', text, shots.map(a => ({ name: a.name, b64: a.b64 })));
+  else go('goSend', text);
 }
 
 function toggleThink() {
@@ -1001,7 +1199,33 @@ function chunks(text, n) {
   return out;
 }
 
+// The tray is not part of the conversation, so the fixture cannot put anything
+// in it: a worker never sends an attachment *to* a frontend, it only receives
+// one. It is still part of what the app looks like, so the demo draws a couple
+// of chips — painted here rather than pasted in as base64, which would put a
+// picture of a picture in the source.
+function demoTray() {
+  pending = [
+    { name: 'failing-tests.png', mime: 'image/png', size: 184320, b64: swatch('#7fa8f0', '#a98fc4') },
+    { name: 'screenshot 2026-08-23 at 14.02.11.png', mime: 'image/png', size: 962560, b64: swatch('#d9a15c', '#e8615f') },
+  ];
+  drawTray();
+}
+
+function swatch(a, b) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 48;
+  const g = c.getContext('2d').createLinearGradient(0, 0, 48, 48);
+  g.addColorStop(0, a);
+  g.addColorStop(1, b);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 48, 48);
+  return c.toDataURL('image/png').split(',', 2)[1];
+}
+
 if (location.search.includes('demo')) {
+  demoTray();
   if (location.search.includes('fast')) demoFast();
   else demoTimed();
 }

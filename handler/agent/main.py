@@ -230,17 +230,27 @@ INTERRUPT_NOTE = ("stopped -- the partial turn above was kept\n\n"
                   "and read what they say next as a correction to it.\n"
                   "</interrupted>")
 
-def _steer_note(texts: list[str]) -> str:
+def _steer_note(typed: list[dict]) -> str:
     """The user's own words, arriving mid-turn.
 
     Tagged for the same reason the others are, and tagged *differently* for one
     that matters more: this is the only injected block that is not the runtime
     speaking. Untagged it reads as an answer to the tool result above it, which
     is exactly what it is not.
+
+    An attachment is named in the text and carried beside it: the pictures ride
+    on the same message (see the caller), and a model reading a bare tag with
+    two images under it has no way to tell which of them the words are about.
     """
-    said = "\n\n".join(texts)
+    parts = []
+    for m in typed:
+        said = m.get("text") or ""
+        if names := [a.get("name") or "image" for a in (m.get("images") or [])]:
+            attached = "[attached: " + ", ".join(names) + "]"
+            said = said + "\n" + attached if said else attached
+        parts.append(said)
     return ("the user sent this while you were working\n\n"
-            "<user_message>\n" + said + "\n</user_message>")
+            "<user_message>\n" + "\n\n".join(parts) + "\n</user_message>")
 
 def _closing_pairs(parsed: list, results: list, running=None) -> list:
     """The round's (call, result) pairs, with one invented for every call that
@@ -591,10 +601,22 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         said = _steer_note(typed) if typed else ""
         runtime = "\n\n".join(n for n in (_finished_note(), stale) if n)
         note = "\n\n".join(n for n in (said, runtime) if n)
+        # Anything attached to those messages travels on this one, in the order
+        # it was sent. Through the adapter rather than by hand for the same
+        # reason the opening turn goes through it: three dialects, three shapes.
+        # Dropped for a model that cannot see -- the names stay in the note, so
+        # it can say it was sent something it cannot look at, which is better
+        # than a 400 that ends the run.
+        steer_images = [a["b64"] for m in typed for a in (m.get("images") or [])] if vision else []
         if note:
-            messages.append({"role": "user", "content": note})
+            messages.append(p.user_message(note, steer_images) if steer_images
+                            else {"role": "user", "content": note})
             # text is what the conversation gets and what the record keeps.
             # show is what the frontend draws, and it is deliberately only the
             # runtime half: the frontend printed the user's own line the moment
             # they typed it, and sending it back would print it twice.
-            yield {"type": "notice", "text": note, "show": runtime, "from_user": bool(said)}
+            yield {"type": "notice", "text": note, "show": runtime, "from_user": bool(said),
+                   # Named on the record for the same reason they are named in
+                   # the note: a reopened conversation has to say a picture was
+                   # sent here, and the record is the only thing that can.
+                   "images": [a for m in typed for a in (m.get("images") or [])] if steer_images else []}

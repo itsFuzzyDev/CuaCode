@@ -131,15 +131,26 @@ class IPC:
         with self._steer_lock: left, self._steer = self._steer, []
         for env in left: self.inbox.put(env)
 
-    def take_steer(self) -> list[str]:
+    def take_steer(self) -> list[dict]:
         """Everything typed since the last drain, oldest first, and clear.
 
         Handed to generate() as a callable so the loop can ask at the one place
         a user message is legal for every provider -- straight after a round's
         tool results -- rather than the loop being interrupted from outside.
+
+        Messages rather than strings, because a message typed mid-run can have
+        a picture attached to it like any other. A message with nothing but an
+        attachment on it is still a message: the emptiness test is on both
+        halves, not on the text.
         """
         with self._steer_lock: got, self._steer = self._steer, []
-        return [t for t in ((e.data or {}).get("text") or "" for e in got) if t.strip()]
+        out = []
+        for e in got:
+            d = e.data or {}
+            text = d.get("text") or ""
+            images = [a for a in (d.get("images") or []) if isinstance(a, dict) and a.get("b64")]
+            if text.strip() or images: out.append({"text": text, "images": images})
+        return out
 
     def cancelled(self) -> bool:
         """True once a cancel has arrived for the run in flight."""

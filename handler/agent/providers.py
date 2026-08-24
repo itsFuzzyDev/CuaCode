@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 
 import ollama
 
+from handler.agent.images import PinnedUser
 from tools._parser.FromProvider import ToolCall, parse_tool_calls
 from tools._parser.ToProvider import format_tool_result
 
@@ -289,7 +290,7 @@ class Ollama:
         rebuilt by every caller.
         """
         if not images: return {"role": "user", "content": text}
-        return {"role": "user", "content": text, "images": list(images)}
+        return PinnedUser(role="user", content=text, images=list(images))
 
     def parse_calls(self, native: list) -> list:
         """Native tool_calls -> ToolCall list. Providers own this because the
@@ -483,9 +484,13 @@ class OpenAI:
 
     def user_message(self, text: str, images: list = None) -> dict:
         if not images: return {"role": "user", "content": text}
-        return {"role": "user", "content": [
-            {"type": "text", "text": text},
-            *({"type": "image_url", "image_url": {"url": f"data:{_media_type(b)};base64,{b}"}} for b in images)]}
+        # The text block is omitted when there is nothing in it. An attachment
+        # sent with no words is an ordinary thing to do -- drag a picture in,
+        # press enter -- and an empty string in a content block is a 400 here
+        # and on anthropic both.
+        return PinnedUser(role="user", content=[
+            *([{"type": "text", "text": text}] if text else []),
+            *({"type": "image_url", "image_url": {"url": f"data:{_media_type(b)};base64,{b}"}} for b in images)])
 
     def parse_calls(self, native: list) -> list:
         out = []
@@ -642,10 +647,10 @@ class Anthropic:
 
     def user_message(self, text: str, images: list = None) -> dict:
         if not images: return {"role": "user", "content": text}
-        return {"role": "user", "content": [
-            {"type": "text", "text": text},
+        return PinnedUser(role="user", content=[
+            *([{"type": "text", "text": text}] if text else []),
             *({"type": "image", "source": {"type": "base64", "media_type": _media_type(b),
-                                           "data": b}} for b in images)]}
+                                           "data": b}} for b in images)])
 
     def models(self) -> list | None:
         try: return sorted(m.id for m in self._client().models.list())
@@ -726,6 +731,48 @@ def _anthropic_call(c: dict) -> dict:
 def _openai_call(c: dict) -> dict:
     return {"id": c["id"], "type": "function",
             "function": {"name": c["name"], "arguments": json.dumps(c["args"])}}
+
+def attachment_note(images: list) -> str:
+    """What the user called the files they attached.
+
+    The model gets the pixels either way; this is the only way it gets the
+    name, and a name is often the most useful sentence about a picture nobody
+    wrote a sentence about -- "login-error.png", "Screenshot 2026-08-23 at
+    14.02.11.png". Cheap enough to always send: a few tokens against an image
+    that costs hundreds.
+
+    One line rather than a tagged block, and the same line the mid-run path
+    uses (see agent/main.py's _steer_note), so an attachment reads the same
+    wherever in a turn it arrived.
+    """
+    names = [i.get("name") or "image" for i in (images or [])]
+    return "[attached: " + ", ".join(names) + "]" if names else ""
+
+def append_user_text(msg: dict, extra: str) -> None:
+    """Fold a runtime block into a user turn, in place.
+
+    Recall, the docs notice, a skill's instructions and the interrupt note all
+    ride on the user's own message rather than following it, because two user
+    messages in a row is a 400 on anthropic. That was a string concatenation
+    until a user turn could carry images: now the content is a string in one
+    dialect and a list of blocks in the other two, and the text has to find the
+    text block rather than be appended to the list.
+
+    A turn that is nothing but images grows its text block here. That is the
+    only case where one is created rather than extended -- user_message leaves
+    it out on purpose, an empty block being a 400 of its own -- and it goes in
+    front of the images so the shape matches the one that had words in it.
+    """
+    if not extra: return
+    content = msg.get("content")
+    if content is None or isinstance(content, str):
+        msg["content"] = content + "\n\n" + extra if content else extra
+        return
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            block["text"] = block["text"] + "\n\n" + extra if block.get("text") else extra
+            return
+    content.insert(0, {"type": "text", "text": extra})
 
 def _images(data) -> list:
     """Both shapes the tools produce: screenshot returns image_base64, photos

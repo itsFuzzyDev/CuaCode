@@ -104,14 +104,21 @@ class Session:
     # Every record is stamped when it happens, so a user record is when it was
     # sent and an assistant record is when it landed -- no second field needed.
     # replay only reads the keys it knows, so `ts` never reaches the provider.
-    def add_user(self, text: str):
+    def add_user(self, text: str, images: list = None):
         # Whether this is the opening message has to be asked before the record
         # is appended, and it is asked at all because add_user also carries
         # runtime notices -- a background job finishing must never get to name
         # the conversation just because the real first message was a greeting.
         first = not any(r.get("t") == "user" for r in self._records) and \
                 not any(r.get("t") == "user" for r in self._pending)
-        self._pending.append({"t": "user", "ts": store.now_iso(), "text": text})
+        rec = {"t": "user", "ts": store.now_iso(), "text": text}
+        # Attachments: [{"name": "shot.png", "b64": "..."}]. Recorded on the
+        # turn they arrived with, because that is what they are -- part of what
+        # the user said, not a tool result that happened to be near it. The
+        # base64 is swapped for a blob ref on the way to disk (_split below),
+        # so messages.jsonl stays a file you can read.
+        if images: rec["images"] = list(images)
+        self._pending.append(rec)
         if first and not self.meta.get("title") and self.meta.get("title_source", "") in ("", "stub"):
             from integrations.memory import naming
             # "" for a greeting, deliberately: a frontend showing the session id
@@ -192,8 +199,13 @@ class Session:
         store.write_json(self.dir / "meta.json", self.meta)
 
     def _split(self, rec: dict) -> dict:
-        if rec.get("t") != "tool": return rec
-        return {**rec, "result": blobs.split(rec.get("result", {}), self.blobs_dir)}
+        if rec.get("t") == "tool":
+            return {**rec, "result": blobs.split(rec.get("result", {}), self.blobs_dir)}
+        # A user turn carrying attachments is the other record with megabytes in
+        # it, and it goes out through the same door for the same reason.
+        if rec.get("t") == "user" and rec.get("images"):
+            return {**rec, "images": blobs.split(rec["images"], self.blobs_dir)}
+        return rec
 
     # ---- loading ----
 

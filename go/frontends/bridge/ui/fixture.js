@@ -23,7 +23,12 @@ window.__FIXTURE = {
       "events": [
         {
           "state": "user",
-          "token": "open notes and write down the three failing tests"
+          "token": "open notes and write down the three failing tests",
+          "images": [
+            {
+              "name": "failing-tests.png"
+            }
+          ]
         }
       ]
     },
