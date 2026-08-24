@@ -150,6 +150,22 @@ function notice(tone, text) {
   push('notice', { tone, text });
 }
 
+// APP_NAME is what the window is called before a conversation has a name of its
+// own, and the first half of what it is called afterwards.
+const APP_NAME = 'CuaCode';
+
+// setTitle names the window after the work in it. Two places, because the page
+// has two hosts: document.title is what a browser tab reads (--serve, ?demo),
+// and goTitle is the native window, which does not follow document.title on its
+// own. The binding is absent when the page is served without a worker, so it is
+// asked for rather than assumed.
+function setTitle(name) {
+  name = sanitize(name || '').trim();
+  const full = name ? APP_NAME + ' — ' + clip(name, 60) : APP_NAME;
+  document.title = full;
+  if (typeof goTitle === 'function') goTitle(full);
+}
+
 // Prose is left as plain text while it streams and marked up once it is done:
 // re-parsing a growing message on every chunk is quadratic in its length, which
 // is exactly the shape of lag that gets worse the more the model says.
@@ -171,6 +187,8 @@ function reset() {
   feed.replaceChildren();
   status.ContextUsed = 0;
   status.ContextLeft = 0;
+  // The window title names the conversation, and the conversation just went.
+  setTitle('');
   // Attached to a message in a conversation that is no longer on screen.
   pending = [];
   drawTray();
@@ -271,8 +289,22 @@ function fold(ev, loading) {
       closeCalls();
       settleProse();
       notice('err', 'error: ' + clip(sanitize(ev.token || ev.err || ''), 400));
+      // A turn the connection ended rather than the model. What streamed before
+      // it went is still on screen and still in the history, so the next message
+      // carries on from it instead of starting over — which is only obvious if
+      // it is said.
+      if (ev.data && ev.data.kept) notice('warn', 'partial reply kept · say anything to carry on');
       finish();
       break;
+
+    // The request never landed and is going out again. Worth a row of its own:
+    // a silent retry and a hung app look identical from this side of the screen.
+    case 'retry': {
+      const d = ev.data || {};
+      notice('warn', 'connection lost · retry ' + (d.attempt || 0) + '/' + (d.of || 0) +
+        ' in ' + (d.secs || 0) + 's');
+      break;
+    }
 
     // A session change replaces the conversation, so the feed goes with it:
     // what is on screen belongs to the session that was open.
@@ -287,9 +319,21 @@ function fold(ev, loading) {
       break;
     }
 
-    case 'session_title':
-      if (ev.data && ev.data.title) notice('', 'named · ' + sanitize(ev.data.title));
+    // What this conversation is called, from whoever called it that: a stub off
+    // the first message, the namer a turn or two later, the agent, or the
+    // session that was just reopened. It is the window title, so all four
+    // matter — see setTitle.
+    case 'session_title': {
+      const d = ev.data || {};
+      setTitle(d.title || '');
+      // Said once, quietly, and only for a name somebody chose. A stub is the
+      // first few words the user just typed, and announcing it back to them
+      // reads as the app repeating itself.
+      if (d.title && (d.source === 'auto' || d.source === 'agent' || d.source === 'user')) {
+        notice('', 'named · ' + sanitize(d.title));
+      }
       break;
+    }
 
     case 'provider': {
       const d = ev.data || {};

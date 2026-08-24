@@ -1,4 +1,4 @@
-import itertools, os, time
+import itertools, os, re, socket, ssl, time
 from tools.loader import load_tools, dispatch, refresh_dynamic
 from tools._parser.ToProvider import to_provider
 from handler.agent import effort, images, interrupt, providers
@@ -89,6 +89,118 @@ def _opened(*a):
     """
     try: return "ok", _open(*a)
     except BaseException as e: return "err", e
+
+# How many times a request that never arrived is sent again, and how long to
+# wait between tries. Doubling from a second gives 1, 2, 4, 8: long enough by
+# the last one that a wifi handover or a provider restart has actually
+# finished, short enough at the first that a blip costs a pause rather than a
+# turn. Four is where the two stop trading against each other -- a fifth try is
+# another sixteen seconds of a person watching a spinner to find out something
+# the fourth already suggested.
+RETRIES = 4
+RETRY_BASE = 1.0
+RETRY_CAP = 30.0
+
+# Failures worth trying again, by the name of the class raised. Providers share
+# no exception hierarchy -- anthropic, openai, ollama and httpx each raise their
+# own -- so the name is the only thing they have in common, and it is matched as
+# a substring so that "Timeout" covers APITimeoutError, ConnectTimeout and
+# ReadTimeout at once.
+_TRANSIENT_TYPES = ("APIConnectionError", "Timeout", "ConnectError", "ReadError", "WriteError",
+                    "RemoteProtocolError", "ProtocolError", "ChunkedEncodingError",
+                    "IncompleteRead", "InternalServerError", "ServiceUnavailable",
+                    "OverloadedError", "RateLimitError", "ResponseError")
+
+# ...and by what the message says, for the providers that raise a bare Exception
+# with the reason only in its text. Deliberately narrow: a failure matched here
+# by accident costs fifteen seconds of retrying before the user is told what
+# actually went wrong.
+_TRANSIENT_TEXT = ("connection", "connect error", "disconnected", "timed out",
+                   "temporarily unavailable", "overloaded",
+                   "network is unreachable", "name or service not known",
+                   "nodename nor servname", "eof occurred", "bad gateway",
+                   "service unavailable", "reset by peer", "broken pipe")
+
+# HTTP codes that mean "later" against the ones that mean "never". A 401 is not
+# going to fix itself, and four retries only delay saying so.
+_TRANSIENT_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 522, 524, 529}
+_FINAL_CODES = {400, 401, 402, 403, 404, 405, 413, 422}
+
+# The OSError subclasses that mean the network, rather than the disk. Listed as
+# a tuple instead of checking OSError itself: a FileNotFoundError raised inside
+# a provider is a bug, and retrying it four times hides the traceback saying so.
+_NET_ERRORS = (ConnectionError, TimeoutError, socket.gaierror, socket.timeout, ssl.SSLError)
+
+
+def _status_of(e) -> int:
+    """The HTTP code behind an exception, or 0.
+
+    Every SDK spells it differently and some only have it in the text, which is
+    why the last resort is a regex over the message.
+    """
+    for attr in ("status_code", "status", "http_status"):
+        v = getattr(e, attr, None)
+        if isinstance(v, bool): continue
+        if isinstance(v, int) and 100 <= v < 600: return v
+        if isinstance(v, str) and v.isdigit() and 100 <= int(v) < 600: return int(v)
+    m = re.search(r"\b([45]\d\d)\b", str(e))
+    return int(m.group(1)) if m else 0
+
+
+def _transient(e) -> bool:
+    """Whether the network is at fault rather than the request.
+
+    The distinction is the whole of the policy. A request that was never
+    delivered costs nothing to send again; one the provider read and refused
+    will be refused identically four more times, and each retry is time the
+    user spends not being told why.
+    """
+    code = _status_of(e)
+    if code in _FINAL_CODES: return False
+    if code in _TRANSIENT_CODES: return True
+    names = [c.__name__ for c in type(e).__mro__]
+    if any(t in n for n in names for t in _TRANSIENT_TYPES): return True
+    if isinstance(e, _NET_ERRORS): return True
+    text = str(e).lower()
+    return any(t in text for t in _TRANSIENT_TEXT)
+
+
+def _retry_after(e) -> float:
+    """What the provider asked to be waited, when it asked. Honouring a 429's
+    own number beats guessing over it, and it is the one case where the server
+    knows better than the backoff."""
+    for attr in ("retry_after", "retry_delay"):
+        v = getattr(e, attr, None)
+        try:
+            if v is not None: return max(0.0, min(float(v), RETRY_CAP))
+        except (TypeError, ValueError): pass
+    headers = getattr(getattr(e, "response", None), "headers", None)
+    try:
+        if headers is not None and (v := headers.get("retry-after")):
+            return max(0.0, min(float(v), RETRY_CAP))
+    except (TypeError, ValueError, AttributeError): pass
+    return 0.0
+
+
+def _backoff(attempt: int, e) -> float:
+    """How long before try number attempt+1: doubling, capped, and overridden by
+    whatever the provider itself asked for."""
+    return _retry_after(e) or min(RETRY_BASE * (2 ** attempt), RETRY_CAP)
+
+
+def _wait(secs: float, stop) -> bool:
+    """Sleep, watching for a cancel. False if the wait was called off.
+
+    A backoff that cannot be stopped is a backoff that makes the app look hung
+    for exactly as long as it waits, and the key someone reaches for while a
+    connection is down is the one that gives up.
+    """
+    end = time.monotonic() + secs
+    while True:
+        if stop(): return False
+        left = end - time.monotonic()
+        if left <= 0: return True
+        time.sleep(min(0.05, left))
 
 def _preview(tool, args: dict, ctx) -> dict | None:
     """What the call about to be asked about would do, when the tool can say.
@@ -230,6 +342,20 @@ INTERRUPT_NOTE = ("stopped -- the partial turn above was kept\n\n"
                   "and read what they say next as a correction to it.\n"
                   "</interrupted>")
 
+# What a dropped connection leaves behind. Shaped like INTERRUPT_NOTE and kept
+# for the same reason: the round is closed off rather than deleted, so half a
+# reply is still there to carry on from instead of costing the whole turn.
+#
+# The difference is who stopped it. Nobody chose this, so there is no correction
+# coming and nothing to wait for -- the model is told to continue, not to expect
+# a new instruction.
+LOST_NOTE = ("connection lost -- the partial turn above was kept\n\n"
+             "<connection_lost>\n"
+             "The connection to the provider dropped part-way through this turn. Everything\n"
+             "above is what had arrived when it did, and the reply may break off mid-sentence.\n"
+             "Carry on from there rather than starting the turn over.\n"
+             "</connection_lost>")
+
 def _steer_note(typed: list[dict]) -> str:
     """The user's own words, arriving mid-turn.
 
@@ -362,6 +488,13 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
     # tool because the tool only hears about the calls it receives, and the
     # interesting number is how many rounds went by without one.
     since_todo = 0
+    # Rounds lost to a connection that dropped before producing anything, which
+    # is the one failure that can be retried invisibly: nothing reached the
+    # screen, so asking again duplicates nothing. Counted across rounds rather
+    # than within one -- a link that is down is down for the whole turn, and a
+    # per-round counter would let a tool loop retry forever, four rounds at a
+    # time.
+    stream_retries = 0
 
     while True:
         # Rollback point for this round. A cancel has to rewind to here: an
@@ -390,18 +523,41 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # the connection for a minute before the first token, and that minute
         # used to be unstoppable. Cancelling here abandons the socket to the
         # daemon thread rather than waiting on a read nobody is reading.
-        state, opened = interrupt.run(lambda: _opened(p, provider, model, messages, tools, system, params),
-                                      stop=stop)
-        if state != "done":
-            # Nothing was produced -- the request had not even been answered --
-            # so there is nothing to keep and nothing to tell the model about.
-            # The delete is a no-op at this point and stands as the guarantee.
-            del messages[mark:]
-            yield {"type": "cancelled", "messages": messages}
-            return
-        kind, payload = opened
-        if kind == "err": raise payload
-        stream, first = payload
+        #
+        # Tried again when it fails the way a network fails. A request that was
+        # never delivered costs nothing to send twice, and the alternative --
+        # what this used to do -- is that a two-second wifi handover throws away
+        # a turn the user then has to type again.
+        attempt, stream, first = 0, None, None
+        while True:
+            state, opened = interrupt.run(lambda: _opened(p, provider, model, messages, tools, system, params),
+                                          stop=stop)
+            if state != "done":
+                # Nothing was produced -- the request had not even been answered
+                # -- so there is nothing to keep and nothing to tell the model
+                # about. The delete is a no-op here and stands as the guarantee.
+                del messages[mark:]
+                yield {"type": "cancelled", "messages": messages}
+                return
+            kind, payload = opened
+            if kind != "err":
+                stream, first = payload
+                break
+            # Anything the provider actually read and refused is final: it will
+            # be refused identically next time, and the user is owed the reason
+            # now rather than after four backoffs. See _transient.
+            if attempt >= RETRIES or not _transient(payload): raise payload
+            secs = _backoff(attempt, payload)
+            attempt += 1
+            # Said out loud. A silent retry and a hung app look identical from
+            # the outside, and the one thing the person watching wants to know
+            # is whether anything is still going to happen.
+            yield {"type": "retry", "attempt": attempt, "of": RETRIES,
+                   "secs": round(secs, 1), "error": str(payload)}
+            if not _wait(secs, stop):
+                del messages[mark:]
+                yield {"type": "cancelled", "messages": messages}
+                return
         # The two halves of a reply, clocked apart. Thinking's clock starts when
         # the request was opened -- the silence before the first thought is the
         # model thinking about thinking, and charging it to the reply would
@@ -415,37 +571,51 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
 
         # The primed Delta is put back in front. stream itself stays the
         # generator, so a cancel below still has something to close().
-        for d in itertools.chain([first] if first is not None else [], stream):
-            if stop():
-                stream.close()
-                break
-            last = d.raw
-            # Merged rather than replaced: the two halves of the count arrive on
-            # different frames, and on anthropic they arrive at opposite ends of
-            # the stream.
-            usage.update(providers.usage_of(d.raw))
-            now = time.monotonic()
-            if d.thinking:
-                yield {"type": "thinking", "text": d.thinking}
-                thinking += d.thinking
-                think_chars, think_end, phase = think_chars + len(d.thinking), now, "thinking"
-            if d.content:
-                yield {"type": "content", "text": d.content}
-                content += d.content
-                reply_chars, reply_end, phase = reply_chars + len(d.content), now, "content"
-            if d.tool_calls:
-                # Complete calls by contract: providers whose arguments arrive
-                # as JSON fragments assemble them before emitting a Delta.
-                yield {"type": "tool_calls", "text": d.tool_calls}
-                calls.extend(d.tool_calls)
-                reply_end, phase = now, "content"
-            # A rate while it is still happening, estimated from characters
-            # because that is all anyone has until the provider bills the round.
-            # Marked as an estimate all the way out, and replaced by the measured
-            # figure the moment there is one.
-            if phase and now >= tick:
-                tick = now + RATE_EVERY
-                yield _rate(phase, think_chars, reply_chars, began, think_end, reply_end)
+        # Wrapped, because the connection can go here too -- and here it has
+        # already put words on the screen. What that costs is decided below;
+        # what matters at this line is that a read error is not a traceback.
+        lost = None
+        try:
+            for d in itertools.chain([first] if first is not None else [], stream):
+                if stop():
+                    stream.close()
+                    break
+                last = d.raw
+                # Merged rather than replaced: the two halves of the count arrive on
+                # different frames, and on anthropic they arrive at opposite ends of
+                # the stream.
+                usage.update(providers.usage_of(d.raw))
+                now = time.monotonic()
+                if d.thinking:
+                    yield {"type": "thinking", "text": d.thinking}
+                    thinking += d.thinking
+                    think_chars, think_end, phase = think_chars + len(d.thinking), now, "thinking"
+                if d.content:
+                    yield {"type": "content", "text": d.content}
+                    content += d.content
+                    reply_chars, reply_end, phase = reply_chars + len(d.content), now, "content"
+                if d.tool_calls:
+                    # Complete calls by contract: providers whose arguments arrive
+                    # as JSON fragments assemble them before emitting a Delta.
+                    yield {"type": "tool_calls", "text": d.tool_calls}
+                    calls.extend(d.tool_calls)
+                    reply_end, phase = now, "content"
+                # A rate while it is still happening, estimated from characters
+                # because that is all anyone has until the provider bills the round.
+                # Marked as an estimate all the way out, and replaced by the measured
+                # figure the moment there is one.
+                if phase and now >= tick:
+                    tick = now + RATE_EVERY
+                    yield _rate(phase, think_chars, reply_chars, began, think_end, reply_end)
+        except Exception as e:
+            # Only a network failure is caught. Anything else is a bug in a
+            # provider or in the loop, and swallowing it into a friendly
+            # "connection lost" would hide it behind the one explanation nobody
+            # investigates.
+            if not _transient(e): raise
+            lost = e
+            try: stream.close()
+            except Exception: pass
         # How long the generating took, split the same way the live rate splits
         # it, and reported with the counts rather than derived from them later:
         # the text is in hand here, and nowhere downstream sees the clock.
@@ -455,6 +625,41 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
                  "thinking_chars": think_chars, "reply_chars": reply_chars,
                  "thinking_secs": round(_span(began, think_end), 3),
                  "reply_secs": round(_span(think_end or began, reply_end), 3)}
+
+        if lost is not None:
+            if thinking or content:
+                # Kept, exactly as an interrupted round is kept: half a reply is
+                # still a reply, and throwing it away is what made a dropped
+                # connection cost the whole turn rather than the rest of it.
+                #
+                # The calls go, for the same reason they go on a cancel. None of
+                # them ran, so nothing is lost by asking again -- and on
+                # anthropic a tool_use turn has to carry the signed thinking
+                # blocks that produced it, which a cut-off stream never finished
+                # handing over.
+                if usage: yield {"type": "usage", "usage": dict(usage), "model": model, **spent}
+                messages.append(p.assistant_message(thinking, content, []))
+                yield {"type": "assistant", "thinking": thinking, "content": content, "tool_calls": []}
+                yield {"type": "failed", "messages": messages, "note": LOST_NOTE,
+                       "error": str(lost), "kept": True}
+                return
+            # Not a word arrived before it dropped, so there is nothing on
+            # screen to preserve and nothing for a note to point at. That makes
+            # it the same failure as a request that never opened, and it is
+            # retried like one.
+            del messages[mark:]
+            if stream_retries >= RETRIES: raise lost
+            secs = _backoff(stream_retries, lost)
+            stream_retries += 1
+            yield {"type": "retry", "attempt": stream_retries, "of": RETRIES,
+                   "secs": round(secs, 1), "error": str(lost)}
+            if not _wait(secs, stop):
+                yield {"type": "cancelled", "messages": messages}
+                return
+            continue
+        # The link is proven good, so the next drop starts its own count rather
+        # than inheriting one from an outage two rounds ago.
+        stream_retries = 0
 
         if stop():
             # Stopped part-way through the reply. What streamed is kept: half a

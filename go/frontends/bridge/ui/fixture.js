@@ -2,7 +2,7 @@
 // own fixture has finished replaying by the time load fires, so a screenshot of
 // it is deterministic. See the demo block at the end of app.js.
 window.__FIXTURE = {
-  "note": "A scripted conversation for ?demo. It is not a mock of the UI: every entry is a real worker envelope, replayed through the same window.__cua.push the bridge uses, so what the page draws here is what it draws in the app. Keep it exercising one of everything — thinking, prose with markup, a batch of calls that partly fails, a notice, and the end of a round.",
+  "note": "A scripted conversation for ?demo. It is not a mock of the UI: every entry is a real worker envelope, replayed through the same window.__cua.push the bridge uses, so what the page draws here is what it draws in the app. Keep it exercising one of everything — thinking, prose with markup, a batch of calls that partly fails, a notice, a dropped connection being retried, and the end of a round.",
   "batches": [
     {
       "delay": 0,
@@ -29,6 +29,38 @@ window.__FIXTURE = {
               "name": "failing-tests.png"
             }
           ]
+        }
+      ]
+    },
+    {
+      "delay": 120,
+      "status": {
+        "State": "running"
+      },
+      "events": [
+        {
+          "state": "session_title",
+          "data": {
+            "title": "write down the three failing tests",
+            "source": "auto"
+          }
+        }
+      ]
+    },
+    {
+      "delay": 200,
+      "status": {
+        "State": "running"
+      },
+      "events": [
+        {
+          "state": "retry",
+          "data": {
+            "attempt": 1,
+            "of": 4,
+            "secs": 1,
+            "error": "Connection error."
+          }
         }
       ]
     },
