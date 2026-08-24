@@ -65,6 +65,8 @@ type Worker struct {
 // too instead of sitting at an empty screen forever.
 func Spawn(onLine func(line []byte), path string, args ...string) (*Worker, error) {
 	cmd := exec.Command(path, args...)
+	// Out of the terminal's session before it is started — see detach.
+	detach(cmd)
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
