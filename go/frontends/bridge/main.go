@@ -141,6 +141,17 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 	must(w.Bind("goCommand", func(action string, fields map[string]any) { sess.Command(action, fields) }))
 	must(w.Bind("goReply", func(id, typ string, fields map[string]any) { sess.Reply(id, typ, fields) }))
 
+	// The window's own name, set from the page. The webview does not follow
+	// document.title on any of the three hosts, and the title is the only part
+	// of the app visible when it is not the front window — in a dock, in a task
+	// switcher, in a list of windows — which is exactly when "CuaCode" alone
+	// stops being enough to tell two of them apart.
+	must(w.Bind("goTitle", func(title string) {
+		if title = strings.TrimSpace(title); title != "" {
+			w.SetTitle(title)
+		}
+	}))
+
 	// The page says when it can receive. Worker events that land before the
 	// first paint are held rather than evaluated into a document that does not
 	// exist yet — the worker's startup line always beats the page.

@@ -58,6 +58,7 @@ The bindings are declared in `main.go`:
 | `goCancel()` | stop the run in flight |
 | `goBackground()` | background the running tool call |
 | `goCommand(action, fields)` | worker command (`session.list`, `session.load`, …) |
+| `goTitle(title)` | name the OS window — the webview does not follow `document.title` |
 | `goReply(id, type, fields)` | answer a worker prompt |
 | `goReady()` | the page can be evaluated into; flushes what was held |
 

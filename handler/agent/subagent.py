@@ -170,6 +170,13 @@ def _drive(spec, messages, settings, key, system, ctx, allow, extra, box, provid
             elif t == "cancelled":
                 stopped = "cancelled"
                 break
+            elif t == "failed":
+                # The connection dropped mid-reply. Whatever had arrived is
+                # already in `content` and comes back with the agent -- half an
+                # answer plus a reason beats an empty one -- but it is labelled
+                # so the caller can tell it apart from an agent that finished.
+                stopped = "connection_lost"
+                break
             elif t == "done":
                 stopped = "submitted" if "value" in box else "no_calls"
                 break

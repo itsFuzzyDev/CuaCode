@@ -220,6 +220,11 @@ func (m *model) reset() {
 	// Carrying them into the next one would send a picture to a session that
 	// was never shown it.
 	m.attach = nil
+	// The window title names the conversation, and the conversation just went.
+	// Cleared rather than left standing: the worker sends the new one either
+	// way, but between the two the terminal would be advertising a session
+	// nobody is looking at any more.
+	m.title = ""
 	m.scroll = 0
 	m.needsClear = true
 	m.push(&block{kind: kHint})
@@ -319,6 +324,19 @@ func (m *model) fold(ev session.Event) {
 		m.notice(cWarn, "cancelled")
 		m.finish()
 
+	case "retry":
+		// The request never landed and is going out again. Worth a line of its
+		// own: a silent retry and a hung app look identical from this side of
+		// the screen, and the question the user has is whether to keep waiting.
+		var reply struct {
+			Attempt int     `json:"attempt"`
+			Of      int     `json:"of"`
+			Secs    float64 `json:"secs"`
+		}
+		_ = json.Unmarshal(p.Data, &reply)
+		m.notice(cWarn, fmt.Sprintf("connection lost · retry %d/%d in %gs",
+			reply.Attempt, reply.Of, reply.Secs))
+
 	case "error":
 		m.closeCalls()
 		msg := p.Token
@@ -326,6 +344,16 @@ func (m *model) fold(ev session.Event) {
 			msg = p.Error
 		}
 		m.notice(cErr, "error: "+clip(sanitize(msg), 400))
+		// A turn the connection ended rather than the model. What streamed
+		// before it went is still on screen and still in the history, so the
+		// next message carries on from it instead of starting over — which is
+		// only obvious if it is said.
+		var kept struct {
+			Kept bool `json:"kept"`
+		}
+		if json.Unmarshal(p.Data, &kept) == nil && kept.Kept {
+			m.notice(cWarn, "partial reply kept · say anything to carry on")
+		}
 		m.finish()
 
 	case "session":
@@ -351,14 +379,24 @@ func (m *model) fold(ev session.Event) {
 		m.push(&block{kind: kResumed, text: text})
 
 	case "session_title":
-		// The worker named the conversation, a turn or two after it started.
-		// Said once, quietly: it changes nothing on screen, and the only reason
-		// to mention it is so the name in the session picker later is not a
-		// surprise.
+		// What this conversation is called, from whoever called it that: a stub
+		// off the first message, the namer a turn or two later, the agent, or
+		// the session that was just reopened. Kept because it is the window
+		// title — see windowTitle — and the terminal would otherwise be naming
+		// the process instead of the work.
 		var reply struct {
-			Title string `json:"title"`
+			Title  string `json:"title"`
+			Source string `json:"source"`
 		}
-		if json.Unmarshal(p.Data, &reply) == nil && reply.Title != "" {
+		if json.Unmarshal(p.Data, &reply) != nil {
+			break
+		}
+		m.title = reply.Title
+		// Said once, quietly, and only for a name somebody chose. A stub is the
+		// first few words of what the user just typed, and announcing it back
+		// to them reads as the app repeating itself; a replayed session's name
+		// is already on the line above saying which session it is.
+		if reply.Title != "" && (reply.Source == "auto" || reply.Source == "agent" || reply.Source == "user") {
 			m.notice(cGhost, "named · "+sanitize(reply.Title))
 		}
 

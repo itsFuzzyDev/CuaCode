@@ -25,6 +25,7 @@ import (
 	"cuacode/core/session"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // spinTickMsg drives the busy animation and, with it, the live clock and the
@@ -87,6 +88,8 @@ type model struct {
 	effort        string            // the thinking level this conversation is set to
 	effortSends   map[string]string // ...and what each rung of the ladder sends this model
 	effortOff     bool              // ...and whether its bottom rung can be honoured at all
+	title         string            // what this conversation is called, for the window title
+	iconName      string            // ...and the last tab name written for it
 	ultra         bool              // ultracode: on only by typing its name
 	ticking       bool              // the animation clock is running
 	loading       bool              // a session load is in flight, so its reply replays
@@ -265,7 +268,10 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 	if m.sess != nil {
 		m.sess.Close()
 	}
-	return m, tea.Quit
+	// The window title bubbletea restores on its own; the tab name it never set
+	// is ours to give back. An empty icon name returns the tab to whatever the
+	// terminal calls it by default, which is the shell you are dropped back to.
+	return m, tea.Sequence(tea.Raw(ansi.SetIconName("")), tea.Quit)
 }
 
 // send puts a message on the wire and echoes it into the feed.
@@ -716,7 +722,36 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 	return nil
 }
 
+// Update is the wrapper; update below is the real one. Everything that can
+// change the conversation's name goes through it, and the tab title is written
+// here rather than at each of those points — there are a dozen of them and only
+// one string that matters.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if title := m.titleCmd(); title != nil {
+		cmd = tea.Batch(cmd, title)
+	}
+	return next, cmd
+}
+
+// titleCmd names the tab, when that name has changed.
+//
+// The window title is set from View, and on iTerm2 — and any terminal that
+// draws tabs — that is not the string on the tab. The tab reads the icon name,
+// OSC 1, which bubbletea's View does not write, so it falls back to naming the
+// tab after the job on the tty. Written through tea.Raw so it goes out on the
+// event loop, in order with the renderer's own writes, rather than racing them
+// from another goroutine.
+func (m *model) titleCmd() tea.Cmd {
+	want := windowTitle(m.title)
+	if want == m.iconName {
+		return nil
+	}
+	m.iconName = want
+	return tea.Raw(ansi.SetIconName(want))
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinTickMsg:
 		if msg.ID == m.spinID {
@@ -812,6 +847,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Left alone, a terminal names its window after the foreground process:
+	// "go" when this was started through `go run`, "deck" from a built binary,
+	// neither of which says anything about what is in the window. Bubbletea
+	// writes this as OSC 2 and clears it on the way out, so the shell's own
+	// title comes back when the program does.
+	//
+	// This is the window, not the tab. The tab is a separate string — see
+	// titleCmd, which writes it.
+	v.WindowTitle = windowTitle(m.title)
 	// The wheel has to be ours. Left to the terminal it scrolls the terminal's
 	// own buffer instead of the feed, and a terminal that keeps scrollback for
 	// the alternate screen — iTerm2 does, by default — has a buffer full of the
@@ -822,6 +866,18 @@ func (m *model) View() tea.View {
 	// Option in iTerm2 and Ghostty, Shift almost everywhere else.
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
+}
+
+// windowTitle is what the terminal calls its window and tab while deck is
+// running: the app, and the conversation in it once that conversation has a
+// name. Sanitized and clipped because the string ends up inside an escape
+// sequence — a newline in it would end the sequence early and leave the rest of
+// the name printed across the screen.
+func windowTitle(name string) string {
+	if name = strings.TrimSpace(sanitize(name)); name != "" {
+		return "cuacode — " + clip(name, 60)
+	}
+	return "cuacode"
 }
 
 const usage = `deck — terminal frontend for the cuacode agent

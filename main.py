@@ -188,6 +188,29 @@ def replay(session, env):
                                      "result": r.get("result", {}), "index": tools_seen, "status": "tooling"})
             tools_seen += 1
 
+# The last name sent to the frontend, so the same one is not sent twice. None
+# rather than "" because "no name yet" is itself worth saying once: a frontend
+# that just replaced its conversation has a stale title to clear.
+_last_title = None
+
+
+def announce_title(env=None):
+    """Tell the frontend what this conversation is called, if that changed.
+
+    One event from one place, whichever of the four writers set it. Replied to
+    when there is an envelope to reply to -- a load or a new session -- and sent
+    unprompted when the namer finishes on its own thread, which answers nobody.
+    """
+    global _last_title
+    title = sess.meta.get("title", "")
+    if title == _last_title: return
+    _last_title = title
+    data = {"state": "session_title", "title": title,
+            "source": sess.meta.get("title_source", ""), "session_id": sess.id}
+    if env is not None: ipc.reply(env, "status", data)
+    else: ipc.send("status", data)
+
+
 # Set when a turn is cancelled, spent on the next one. The note says the run was
 # stopped and what survived of it, and it has to travel between turns because
 # there is nowhere legal to put it at the moment it is written: it is a user
@@ -210,8 +233,13 @@ while True:
     # one writer -- a naming call that lands mid-stream must not interleave
     # with it.
     for finished in naming.drain():
-        if named := naming.apply(finished, sess):
-            ipc.send("status", {"state": "session_title", **named})
+        naming.apply(finished, sess)
+    # Said here, once, whoever set it. A name arrives from four places -- a stub
+    # off the first message, the auto-namer a turn or two later, the agent
+    # renaming it, and opening an older conversation -- and a frontend putting
+    # it in its window title needs all four. Comparing against the last one sent
+    # is what makes polling it every pass free.
+    announce_title()
 
     for env in ipc.poll():
         if env.type == "terminal":
@@ -411,6 +439,9 @@ while True:
             naming.set_live(sess)
             ipc.reply(env, "status", {"state": "session", "session_id": sess.id,
                                       "effort": sess.effort, "msg_count": len(messages)})
+            # A new conversation has no name yet, and saying so is the point:
+            # the frontend is showing the one that just went.
+            announce_title(env)
         elif action == "session.load":
             try:
                 loaded = Session.open(env.data.get("id", ""))
@@ -422,6 +453,9 @@ while True:
                 # showing before the replayed conversation starts arriving.
                 ipc.reply(env, "status", {"state": "session", "session_id": sess.id,
                                           "effort": sess.effort, "msg_count": len(messages)})
+                # Before the replay rather than after it: the conversation is
+                # already this one by the time its first message is redrawn.
+                announce_title(env)
                 replay(sess, env)
                 ipc.reply(env, "token", {"state": "done", "token": "done", "status": "done",
                                          "msg_count": len(messages)})
@@ -484,6 +518,12 @@ while True:
             providers.append_user_text(turn, providers.attachment_note(attached))
             messages.append(turn)
             sess.add_user(text, attached)
+            # The opening message is what a session gets its provisional name
+            # from, and that name is set inside the call above. Said now rather
+            # than at the top of the loop: the loop does not come back around
+            # until the turn ends, and a window title that only appears once the
+            # answer is finished is a window title for the wrong thing.
+            announce_title(env)
             # Where the turn is happening, for anything that scores by it. Set
             # before recall runs and before the tool descriptions are rebuilt,
             # which is what makes the memory index the *right* project's.
@@ -629,6 +669,28 @@ while True:
                         # would sit next to the one the user is about to type.
                         pending_note = chunk.get("note", "")
                         ipc.reply(env, "token", {"state": "cancelled", "token": "cancelled", "status": "cancelled", "msg_count": len(messages)})
+                    elif typ == "failed":
+                        # A dropped connection, not a cancel, and handled the
+                        # same way for the same reason: the loop closed the
+                        # round off instead of abandoning it, so what streamed
+                        # before the link went is still on screen and still in
+                        # the history. `kept` is what says so -- the state is
+                        # "error" because the turn did end badly, and a frontend
+                        # that predates this field draws it as one.
+                        messages = chunk.get("messages", messages)
+                        sess.commit()
+                        pending_note = chunk.get("note", "")
+                        ipc.reply(env, "token", {"state": "error", "token": chunk.get("error", ""),
+                                                 "status": "error", "kept": True,
+                                                 "msg_count": len(messages)})
+                    elif typ == "retry":
+                        # No "status" key, for the same reason "rate" has none:
+                        # this says the request is being sent again, not that
+                        # the run changed state, and a frontend must not be
+                        # knocked off thinking or tooling by it.
+                        ipc.reply(env, "status", {"state": "retry", "attempt": chunk.get("attempt", 0),
+                                                  "of": chunk.get("of", 0), "secs": chunk.get("secs", 0),
+                                                  "error": chunk.get("error", "")})
                     elif typ == "rate":
                         # No "status" key: this says how fast, not what state
                         # the run is in, and a rate arriving mid-stream must not
