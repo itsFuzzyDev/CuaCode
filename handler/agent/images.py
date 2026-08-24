@@ -30,6 +30,22 @@ NOTE = ("[screenshot removed from the transcript -- only the most recent capture
 DEFAULT_KEEP = 2
 
 
+class PinnedUser(dict):
+    """A user turn whose images the user attached by hand.
+
+    The window above exists because a computer-use transcript is mostly
+    screenshots of a screen that has since changed. An image someone dragged
+    into the prompt is the opposite of that: it is the subject of the
+    conversation, it never goes stale, and there is no tool the model can call
+    to take another one. So it is exempt, and the exemption travels with the
+    message rather than with a rule here -- providers.user_message returns this
+    type, replay rebuilds it on reload, and the whole of the marking is that.
+
+    A plain dict everywhere else: json.dumps, the provider clients and every
+    `msg["role"]` in this codebase see nothing different.
+    """
+
+
 def _slots(msg: dict) -> list[tuple]:
     """Every encoded image in one message, in the order it appears.
 
@@ -72,7 +88,7 @@ def evict(messages: list[dict], keep: int = DEFAULT_KEEP) -> int:
     sighted one has images in it that nothing will ever look at again.
     """
     if keep < 0: return 0
-    slots = [s for msg in messages for s in _slots(msg)]
+    slots = [s for msg in messages if not isinstance(msg, PinnedUser) for s in _slots(msg)]
     doomed = slots[:-keep] if keep else slots
     for container, key in doomed:
         _blank(container, key)

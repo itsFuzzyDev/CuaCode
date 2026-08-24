@@ -163,7 +163,14 @@ def replay(session, env):
     for r in session.records():
         t = r.get("t")
         if t == "user":
-            ipc.reply(env, "token", {"state": "user", "token": r.get("text", ""), "status": "running"})
+            # Names, never payloads. A frontend redrawing a conversation wants
+            # to show that a picture was attached and what it was called;
+            # shipping the base64 back would put megabytes on the wire for
+            # every reopened session, to draw a thumbnail nobody asked for.
+            data = {"state": "user", "token": r.get("text", ""), "status": "running"}
+            if r.get("images"):
+                data["images"] = [{"name": i.get("name") or "image"} for i in r["images"]]
+            ipc.reply(env, "token", data)
         elif t == "recall":
             # Drawn, not hidden. Something the runtime put in front of the model
             # on the user's behalf is exactly the kind of thing they are
@@ -446,11 +453,37 @@ while True:
                 sess.set_model(now[1])
                 messages = sess.messages()
             text = env.data.get("text", "")
+            # What the user attached to this message, as [{"name", "b64"}].
+            # Only the payload reaches the model -- the filename is for the
+            # frontends, which show it in place of a picture they have no way
+            # to draw -- and it is kept on the record so a reopened session
+            # still says what was sent rather than "1 image".
+            attached = [a for a in (env.data.get("images") or [])
+                        if isinstance(a, dict) and a.get("b64")]
+            # A model that cannot see is told rather than sent an image it will
+            # 400 on. The attachment is dropped from the request and from the
+            # record both: recording it would put it back into the history on
+            # the next turn, and the turn after that, forever.
+            if attached and not config.can_see(SETTINGS["provider"]):
+                names = ", ".join(a.get("name") or "image" for a in attached)
+                ipc.reply(env, "token", {"state": "notice", "status": "running",
+                                         "token": f"{len(attached)} image(s) not sent ({names}): "
+                                                  f"{SETTINGS.get('model') or SETTINGS['provider']} cannot see images"})
+                attached = []
             # Asked before the record is written, because "is this the opening
             # message" stops being answerable the moment it is one.
             opening = not any(r.get("t") == "user" for r in sess.records())
-            messages.append({"role": "user", "content": text})
-            sess.add_user(text)
+            # Built by the provider adapter rather than by hand: a user turn
+            # with a picture on it is three different shapes, and this is the
+            # same call replay makes when it rebuilds the turn from disk.
+            turn = providers.get(sess.provider).user_message(text, [a["b64"] for a in attached])
+            # The names, in the message itself. Not recorded as a separate
+            # record: it is derived from the attachments on the user record, so
+            # replay rebuilds the identical line from the identical source
+            # rather than from a note that could drift from it.
+            providers.append_user_text(turn, providers.attachment_note(attached))
+            messages.append(turn)
+            sess.add_user(text, attached)
             # Where the turn is happening, for anything that scores by it. Set
             # before recall runs and before the tool descriptions are rebuilt,
             # which is what makes the memory index the *right* project's.
@@ -493,7 +526,7 @@ while True:
             for extra in (pending_note, note, docs, skill_block):
                 if not extra: continue
                 sess.add_recall(extra)
-                messages[-1]["content"] += "\n\n" + extra
+                providers.append_user_text(messages[-1], extra)
                 ipc.reply(env, "token", {"state": "notice", "token": extra, "status": "running"})
             pending_note = ""
             ipc.reply(env, "status", {"type": "chat_received"})
@@ -640,7 +673,7 @@ while True:
                         # own words with it. Recorded as a user record either
                         # way: that is the role it occupies in the history, and a
                         # record that lied about it would replay wrong.
-                        sess.add_user(chunk.get("text", ""))
+                        sess.add_user(chunk.get("text", ""), chunk.get("images") or None)
                         # Only the runtime half goes to the frontend. It drew the
                         # user's line when they typed it, and a notice repeating
                         # it would put the same sentence on screen twice.
