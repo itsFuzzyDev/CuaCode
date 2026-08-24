@@ -112,6 +112,17 @@ func (s *Session) Snapshot() Snapshot {
 
 // SendChat sends a user message and returns its envelope ID.
 func (s *Session) SendChat(text string) (string, error) {
+	return s.SendChatWith(text, nil)
+}
+
+// SendChatWith is SendChat with attachments: pictures the user dropped onto the
+// message, which the worker puts in front of the model as part of that turn.
+//
+// Sent on the same envelope as the text rather than on one of their own,
+// because that is what they are — part of what the user said. A separate
+// envelope would arrive as a second user message, which is a 400 on anthropic
+// and a different turn on everything else.
+func (s *Session) SendChatWith(text string, images []protocol.Image) (string, error) {
 	s.mu.Lock()
 	s.msgSeq++
 	id := fmt.Sprintf("msg-%d", s.msgSeq)
@@ -136,7 +147,7 @@ func (s *Session) SendChat(text string) (string, error) {
 	if w == nil {
 		return id, fmt.Errorf("session not started")
 	}
-	data, _ := json.Marshal(protocol.CmdData{Action: "chat", Text: text})
+	data, _ := json.Marshal(protocol.CmdData{Action: "chat", Text: text, Images: images})
 	return id, w.SendEnv(protocol.Envelope{Type: "cmd", ID: id, Data: data})
 }
 

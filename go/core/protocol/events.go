@@ -30,6 +30,12 @@ type Event struct {
 	ThinkTPS    float64 // ...while it was thinking
 	ReplyTPS    float64 // ...while it was answering
 	TPSEst      bool    // the rate came from characters, not from a token count
+
+	// What a replayed user turn had attached to it, by name. Names only: the
+	// worker does not send the payloads back when a conversation is reopened,
+	// because a frontend redrawing a session wants to say a picture was there,
+	// not to be handed megabytes of it again.
+	Images []string
 }
 
 type eventPayload struct {
@@ -50,6 +56,9 @@ type eventPayload struct {
 	ThinkTPS    *float64        `json:"think_tps"`
 	ReplyTPS    *float64        `json:"reply_tps"`
 	TPSEst      *bool           `json:"tps_est"`
+	Images      []struct {
+		Name string `json:"name"`
+	} `json:"images"`
 }
 
 // decodeToken renders a token payload as text. The worker sends a JSON string
@@ -125,6 +134,9 @@ func ParseEvent(raw []byte) (Event, error) {
 		}
 		if p.TPSEst != nil {
 			ev.TPSEst = *p.TPSEst
+		}
+		for _, img := range p.Images {
+			ev.Images = append(ev.Images, img.Name)
 		}
 	}
 	return ev, nil
