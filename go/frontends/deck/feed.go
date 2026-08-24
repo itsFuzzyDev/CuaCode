@@ -67,6 +67,11 @@ type block struct {
 	text string
 	tone string // notice accent
 
+	// What a user message had attached to it, by name. Names, because a
+	// terminal cannot draw the picture and the filename is the whole of what
+	// it can say — and because that is all a reopened conversation sends back.
+	files []string
+
 	acts       []act
 	start, end time.Time
 	open       bool // still collecting results — the header clock ticks
@@ -211,6 +216,10 @@ func (m *model) reset() {
 	// The next round reports its own, and until it does the gauge says nothing
 	// rather than the last conversation's number.
 	m.status.ContextUsed, m.status.ContextLeft = 0, 0
+	// Attached to a message in a conversation that is no longer on screen.
+	// Carrying them into the next one would send a picture to a session that
+	// was never shown it.
+	m.attach = nil
 	m.scroll = 0
 	m.needsClear = true
 	m.push(&block{kind: kHint})
@@ -258,7 +267,7 @@ func (m *model) fold(ev session.Event) {
 		// is echoed into the feed when it is sent, not when it comes back.
 		m.boundary()
 		m.closeCalls()
-		m.push(&block{kind: kUser, text: p.Token})
+		m.push(&block{kind: kUser, text: p.Token, files: p.Images})
 
 	case "thinking":
 		m.stream(kThink, p.Token)
@@ -504,7 +513,7 @@ func (m *model) renderBlock(b *block, flags uint8, live bool) []string {
 	case kHint:
 		return m.renderHint()
 	case kUser:
-		return m.marked(b.text, "▌ ", cUser, cInk+bold)
+		return m.renderUser(b)
 	case kProse:
 		return m.renderProse(b, live)
 	case kThink:
@@ -603,12 +612,12 @@ func (m *model) renderResumed(b *block) []string {
 }
 
 func (m *model) renderHint() []string {
-	keys := []string{"ctrl+t thinking", "tab tool calls", "shift+tab arguments", "ctrl+o inspect call", "esc stop", "ctrl+c quit"}
+	keys := []string{"ctrl+t thinking", "tab tool calls", "shift+tab arguments", "ctrl+o inspect call", "ctrl+v attach image", "esc stop", "ctrl+c quit"}
 	// Shown only while it would do something. A key that is listed and ignored
 	// teaches people the app is unreliable, which is worse than not knowing the
 	// key exists.
 	if m.status.State == session.Tools {
-		keys = append(keys[:5:5], "ctrl+b background", "ctrl+c quit")
+		keys = append(keys[:6:6], "ctrl+b background", "ctrl+c quit")
 	}
 
 	name := paint(cMuted, "cuacode") + paint(cFaint, " · ") + paint(cGhost, "deck")
@@ -619,6 +628,36 @@ func (m *model) renderHint() []string {
 		margin + "  " + name,
 		margin + "  " + paint(cGhost, strings.Join(keys, sep)),
 	}
+}
+
+// names is the attachment list as the feed and the input row show it.
+func names(atts []attachment) []string {
+	if len(atts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(atts))
+	for _, a := range atts {
+		out = append(out, a.Name)
+	}
+	return out
+}
+
+// renderUser draws what the human said, and under it what they attached. The
+// filenames get their own row rather than being folded into the sentence:
+// they are not something the user typed, and a message that was nothing but a
+// picture would otherwise have no rows at all.
+func (m *model) renderUser(b *block) []string {
+	rows := m.marked(b.text, "▌ ", cUser, cInk+bold)
+	if len(b.files) == 0 {
+		return rows
+	}
+	if b.text == "" {
+		rows = nil // nothing was said; the pictures are the message
+	}
+	for _, name := range b.files {
+		rows = append(rows, margin+paint(cUser, "▌ ")+paint(cMuted, "▣ "+name))
+	}
+	return rows
 }
 
 // marked wraps text under a two-cell marker that repeats down the left edge, so

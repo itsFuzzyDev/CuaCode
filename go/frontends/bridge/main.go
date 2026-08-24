@@ -20,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 
+	"cuacode/core/attach"
 	"cuacode/core/protocol"
 	"cuacode/core/runner"
 	"cuacode/core/session"
@@ -114,6 +115,27 @@ func main() {
 // and would let two messages sent in quick succession swap order.
 func bind(w webview.WebView, sess *session.Session, p *pump) {
 	must(w.Bind("goSend", func(text string) { sess.SendChat(text) }))
+	// The same message with pictures dropped or pasted onto it. A second
+	// binding rather than a second argument on the first: the page calls
+	// whichever it needs, and one served on its own with no bindings at all
+	// still runs either way.
+	must(w.Bind("goSendWith", func(text string, images []protocol.Image) {
+		sess.SendChatWith(text, images)
+	}))
+	// The clipboard, read by the OS rather than by the page.
+	//
+	// A paste event is supposed to carry the picture in clipboardData, and in
+	// a browser it does. In a webview it frequently does not — WKWebView hands
+	// over an empty file list for an image copied by anything but itself — and
+	// the page has no way to tell that apart from "there was no picture". So it
+	// asks here, and this is the same reader the terminal frontend uses, which
+	// is the point of it living in core.
+	//
+	// Synchronous like the rest, and unlike the rest it runs a program: a
+	// couple of hundred milliseconds on the UI thread, once, on a keypress the
+	// user is waiting for the result of anyway.
+	must(w.Bind("goClipboard", func() (attach.Image, error) { return attach.Clipboard() }))
+
 	must(w.Bind("goCancel", func() { sess.Cancel() }))
 	must(w.Bind("goBackground", func() { sess.Background() }))
 	must(w.Bind("goCommand", func(action string, fields map[string]any) { sess.Command(action, fields) }))
