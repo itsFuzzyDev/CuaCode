@@ -101,7 +101,7 @@ func TestPermissionScope(t *testing.T) {
 	}
 }
 
-// TestNoStandingDeny checks that refusing is always for one call only — there
+// TestNoStandingDeny checks that refusing is always for one call only - there
 // is no way to leave a rule behind that keeps saying no.
 func TestNoStandingDeny(t *testing.T) {
 	m := initialModel()
@@ -126,7 +126,7 @@ func TestNoStandingDeny(t *testing.T) {
 }
 
 // TestPermissionQueue checks that questions arriving while one is up are asked
-// in turn rather than dropped — each is a run waiting to continue.
+// in turn rather than dropped - each is a run waiting to continue.
 func TestPermissionQueue(t *testing.T) {
 	m := initialModel()
 	m.width, m.height = 80, 24
@@ -268,7 +268,7 @@ func TestSessionReplay(t *testing.T) {
 	m.fold(parse(t, `{"type":"status","id":"c1","data":{"state":"session","session_id":"s-new"}}`))
 	m.rebuild()
 
-	// The masthead survives — it is what an empty screen looks like — but the
+	// The masthead survives - it is what an empty screen looks like - but the
 	// conversation does not.
 	if n := len(m.blocks); n != 2 {
 		t.Fatalf("after /new the feed holds %d blocks, want the masthead and the notice", n)
@@ -338,7 +338,7 @@ func TestResumeFlag(t *testing.T) {
 		{args: []string{"-r"}, wantResume: true},
 		{args: []string{"--resume", "20260807-154254-6dbf"}, wantResume: true, wantID: "20260807-154254-6dbf"},
 		{args: []string{"--resume=20260807-154254-6dbf"}, wantResume: true, wantID: "20260807-154254-6dbf"},
-		// A flag after --resume is a flag, not a session id — and --help wins
+		// A flag after --resume is a flag, not a session id - and --help wins
 		// outright, since the program only prints usage and leaves.
 		{args: []string{"--resume", "--help"}, wantHelp: true},
 		{args: []string{"-h"}, wantHelp: true},
@@ -600,7 +600,7 @@ func TestGradientKeepsWidth(t *testing.T) {
 }
 
 // TestFrameNeverOverflows is the invariant that a frame is exactly as tall as
-// the terminal — never one row more. A frame that overflows makes the terminal
+// the terminal - never one row more. A frame that overflows makes the terminal
 // scroll, which moves earlier rows up the screen rather than overwriting them,
 // and the display fills with the remains of previous frames that no redraw can
 // clear. Short windows with a menu and a multi-line message are where it
@@ -701,7 +701,7 @@ func permEdit(diff string) json.RawMessage {
 // TestPermissionScrollsItsBody is what a long patch is for: the prompt shows a
 // window into it and every line is reachable by scrolling, rather than the
 // middle of the change being something you are asked to take on trust. The
-// choices stay on screen throughout — the block may never push the answer off.
+// choices stay on screen throughout - the block may never push the answer off.
 func TestPermissionScrollsItsBody(t *testing.T) {
 	m := initialModel()
 	m.width, m.height = 80, 24

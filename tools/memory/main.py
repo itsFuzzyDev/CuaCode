@@ -20,7 +20,7 @@ def _index() -> str:
         return ""
     if not lines:
         return "\n\nNothing remembered yet." + (
-            f" ({total} out of scope — `search` finds them.)" if total else "")
+            f" ({total} out of scope - `search` finds them.)" if total else "")
     out = "\n\nIn scope now:\n" + "\n".join(lines)
     if (rest := total - len(lines)) > 0:
         out += (f"\n\n{rest} other{'s are' if rest > 1 else ' is'} out of scope for this directory "

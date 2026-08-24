@@ -87,7 +87,7 @@ func TestSessionRoundTrip(t *testing.T) {
 }
 
 // cancelWorker answers a chat with one token and then stalls, so the cancel
-// has to arrive mid-run — the case the flag on the worker's reader thread
+// has to arrive mid-run - the case the flag on the worker's reader thread
 // exists for.
 const cancelWorker = `#!/bin/bash
 echo '{"type":"status","id":"boot","data":{"state":"ready"}}'

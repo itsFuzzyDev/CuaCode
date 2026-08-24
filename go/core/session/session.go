@@ -37,8 +37,8 @@ type Snapshot struct {
 
 	// The round that is generating, or the last one that did: what it wrote, how
 	// much of that was thinking rather than answer, and how fast each half came
-	// out. It moves live while the round streams — estimated from characters,
-	// which TPSEst says out loud — and is replaced by the provider's own count
+	// out. It moves live while the round streams - estimated from characters,
+	// which TPSEst says out loud - and is replaced by the provider's own count
 	// when the round is billed. Held afterwards, because it describes the round
 	// it belongs to and stays true once that round is over.
 	Phase       string // thinking | content, while one is streaming
@@ -119,7 +119,7 @@ func (s *Session) SendChat(text string) (string, error) {
 // message, which the worker puts in front of the model as part of that turn.
 //
 // Sent on the same envelope as the text rather than on one of their own,
-// because that is what they are — part of what the user said. A separate
+// because that is what they are - part of what the user said. A separate
 // envelope would arrive as a second user message, which is a 400 on anthropic
 // and a different turn on everything else.
 func (s *Session) SendChatWith(text string, images []protocol.Image) (string, error) {
@@ -128,8 +128,8 @@ func (s *Session) SendChatWith(text string, images []protocol.Image) (string, er
 	id := fmt.Sprintf("msg-%d", s.msgSeq)
 	s.snap.Msgs++
 	// Only when this message starts a run. Sent into one already going it is a
-	// mid-turn message — the worker holds it and speaks it into the round in
-	// flight — and the readouts belong to that round, which has not ended.
+	// mid-turn message - the worker holds it and speaks it into the round in
+	// flight - and the readouts belong to that round, which has not ended.
 	// Clearing them there would blank a live rate every time the user typed.
 	if s.snap.State != Running && s.snap.State != Tools {
 		// The rate belonged to the round that just ended. Cleared rather than left
@@ -156,7 +156,7 @@ func (s *Session) SendChatWith(text string, images []protocol.Image) (string, er
 // message.
 //
 // It lands wherever the run currently is: while the request is opening, between
-// streamed chunks, between tool calls, and inside one — a tool that watches for
+// streamed chunks, between tool calls, and inside one - a tool that watches for
 // it stops, and one that does not is abandoned rather than waited for. The
 // conversation is rewound past the partial turn either way, so nothing
 // half-finished is carried into the next one. A cancel sent while the worker is
@@ -178,7 +178,7 @@ func (s *Session) Cancel() (string, error) {
 // Background pushes the tool call currently running into the background and
 // lets the turn carry on without it. The call keeps going under a job id; the
 // agent is handed that id where it expected a result, and collects the real one
-// later. Nothing is cancelled — this is the opposite of Cancel, for the case
+// later. Nothing is cancelled - this is the opposite of Cancel, for the case
 // where the work is wanted and the waiting is not.
 //
 // It applies to the call in flight and nothing else. Sent while the worker is
@@ -202,8 +202,8 @@ func (s *Session) Background() (string, error) {
 // Command sends an arbitrary worker command and returns its envelope ID. The
 // worker's answer arrives through notify like any other line, matched by that
 // ID. Chat and cancel have their own methods because they touch session state;
-// everything else the worker accepts — session.list, session.new, provider.use
-// — goes through here.
+// everything else the worker accepts - session.list, session.new, provider.use
+// - goes through here.
 func (s *Session) Command(action string, fields map[string]any) (string, error) {
 	s.mu.Lock()
 	s.msgSeq++
@@ -230,7 +230,7 @@ func (s *Session) Command(action string, fields map[string]any) (string, error) 
 
 // Reply answers a request the worker made of the frontend, echoing back the ID
 // it asked under. The worker blocks until this arrives, so a request the
-// frontend chooses to leave open stays open — that is the point of asking.
+// frontend chooses to leave open stays open - that is the point of asking.
 func (s *Session) Reply(id, typ string, fields map[string]any) error {
 	s.mu.Lock()
 	w := s.worker

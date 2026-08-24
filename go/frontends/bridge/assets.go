@@ -16,7 +16,7 @@ var uiFS embed.FS
 // serveUI publishes the embedded page on loopback and returns its URL.
 //
 // A file:// page would be simpler, but every engine treats one as an opaque
-// origin with its own rules about modules, fetch, and storage — three sets of
+// origin with its own rules about modules, fetch, and storage - three sets of
 // rules for one page. A loopback server is a normal http origin on all three.
 //
 // The path carries a random token because loopback is not private: any process

@@ -6,7 +6,7 @@ A subagent is one markdown file. Frontmatter is the configuration, the body is
 its system prompt.
 
 Write it to `~/.cuacode/subagents/<name>.md` with the file tool. It is loadable
-on your next turn — no restart. Never write to the repo's
+on your next turn - no restart. Never write to the repo's
 `integrations/subagents/`; those ship with the app.
 
 ## The file
@@ -34,22 +34,22 @@ description of it.
 
 ## Fields
 
-- `tools` — names from the tools list. `[]` means none, which is right for
+- `tools` - names from the tools list. `[]` means none, which is right for
   anything that only has to think about text you hand it. `"*"` means all.
   Leaving the key out means none. Give it the fewest that do the job; every
   extra tool is another thing it can waste a round on.
-- `effort` — `off`/`low`/`medium`/`high`/`max`. Reading and extracting is
+- `effort` - `off`/`low`/`medium`/`high`/`max`. Reading and extracting is
   `low`. Reserve `high` for judgement.
-- `max_rounds` — hard stop. It returns `stopped: "max_rounds"` and whatever it
+- `max_rounds` - hard stop. It returns `stopped: "max_rounds"` and whatever it
   had. A tool-less agent needs 2-3; a fetching one 8-12.
-- `output` — the schema it must fill. Omit it and you get its final text as a
+- `output` - the schema it must fill. Omit it and you get its final text as a
   plain string instead.
-- `provider` / `model` — optional, defaults to whatever is active.
+- `provider` / `model` - optional, defaults to whatever is active.
 
 ## The output schema
 
 This is the part that matters. The agent gets a `submit_result` tool built
-from the schema and it is the only way back — everything else it writes is
+from the schema and it is the only way back - everything else it writes is
 thrown away. A field it cannot fill honestly is a field it will fill dishonestly,
 so:
 

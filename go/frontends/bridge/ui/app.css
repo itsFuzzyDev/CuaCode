@@ -1,7 +1,7 @@
 /* Two media on one surface.
  *
  * The agent's prose is a document: a reading face, a measure, room to breathe.
- * Everything the machine says — what it thought, what it touched, how it went —
+ * Everything the machine says - what it thought, what it touched, how it went -
  * is an instrument: mono, small, tabular, tight. The user's own messages belong
  * to the instrument half, because a message to an agent is a command, and the
  * one thing a feed has to make obvious is who is speaking.
@@ -102,7 +102,7 @@ html, body {
   /* No content-visibility here, deliberately. Skipping offscreen blocks needs
      contain-intrinsic-size: auto <len> to remember what each one measured, and
      where that is unsupported every offscreen block collapses to nothing, which
-     keeps it offscreen — a feed that empties itself the moment it outgrows the
+     keeps it offscreen - a feed that empties itself the moment it outgrows the
      window. The feed stays cheap the way it already was: text is appended to an
      existing node rather than re-rendered, so what is already on screen costs
      nothing to keep there. */
@@ -430,7 +430,7 @@ html, body {
 
 /* The tray sits between the status line and the prompt, because that is the
    order it reads in: what this machine is doing, what is riding on the next
-   message, then the message. Chips rather than a list — an attachment is one
+   message, then the message. Chips rather than a list - an attachment is one
    object, and the thumbnail is the only part of it worth space. */
 .tray {
   display: flex;
@@ -502,8 +502,8 @@ body.dropping .caret { color: var(--you); }
   border: 1px solid var(--rail);
   display: block;
 }
-/* A reopened conversation gets the names back and not the pictures — the
-   worker does not re-send megabytes to redraw a thumbnail — so the name is
+/* A reopened conversation gets the names back and not the pictures - the
+   worker does not re-send megabytes to redraw a thumbnail - so the name is
    what stands in for one. */
 .b.user .shots .named {
   font-size: 11px;

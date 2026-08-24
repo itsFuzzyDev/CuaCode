@@ -4,8 +4,8 @@ package main
 //
 // The worker does the counting and says which of its numbers were measured and
 // which estimated; this only draws them. The drawing is a grid of cells against
-// the model's window, because the question is a proportion — how much room is
-// left, and what is taking the rest — and a proportion reads faster as an area
+// the model's window, because the question is a proportion - how much room is
+// left, and what is taking the rest - and a proportion reads faster as an area
 // than as a column of numbers. The numbers are beside it for when the area is
 // not enough.
 
@@ -108,8 +108,8 @@ const (
 )
 
 // gridShape fits the grid to the room there is: the full sixteen columns where
-// they fit, fewer where they do not. Losing columns costs resolution — each cell
-// stands for a larger share — and losing the grid entirely would cost the one
+// they fit, fewer where they do not. Losing columns costs resolution - each cell
+// stands for a larger share - and losing the grid entirely would cost the one
 // part of this page that answers the question at a glance, so it shrinks rather
 // than going.
 func gridShape(avail int) (cols, rows, cells int) {
@@ -285,8 +285,8 @@ func (m *model) sectionRows(rep *ctxReport, width int) []string {
 
 // turnRow is the last round's behaviour, split into the two halves it actually
 // spent its time on: thinking, then answering. One averaged rate hides exactly
-// what people open this page to find — that the ninety seconds went to a thought
-// nobody read, or that the answer itself crawled — so the halves get a row each
+// what people open this page to find - that the ninety seconds went to a thought
+// nobody read, or that the answer itself crawled - so the halves get a row each
 // and the round's own total sits under them.
 func (m *model) turnRow(t ctxTurn, width int) []string {
 	if t.Out == 0 && t.TPS == 0 {
@@ -333,7 +333,7 @@ func (m *model) turnRow(t ctxTurn, width int) []string {
 }
 
 // ---------------------------------------------------------------------------
-// /usage — every conversation, added up
+// /usage - every conversation, added up
 
 type usageBucket struct {
 	Name    string  `json:"name"` // model rows only
@@ -417,7 +417,7 @@ func (m *model) renderUsage(b *block) []string {
 			paint(cFaint, fmt.Sprintf("   %.0f tok/s average", rate(rep.Total)))),
 	}
 	// Said rather than skipped: sessions from before any of this was recorded,
-	// or run against a provider that reports no usage, are not free — they are
+	// or run against a provider that reports no usage, are not free - they are
 	// unmeasured, and a total that quietly dropped them would read as complete.
 	if rep.Unmeasured > 0 {
 		rows = append(rows, margin+"  "+paint(cGhost,
@@ -477,7 +477,7 @@ func (m *model) renderUsage(b *block) []string {
 			}
 			// A session rolled up before the peak was recorded does not know its
 			// own, and says so rather than reporting a zero it never measured.
-			peak := "–"
+			peak := "-"
 			if s.Peak > 0 {
 				peak = fmtTokens(s.Peak)
 			}
@@ -568,7 +568,7 @@ func (m *model) renderContext(b *block) []string {
 		rows = append(rows, turn...)
 	}
 
-	foot := "counted here, not asked of the provider — /context costs nothing to run"
+	foot := "counted here, not asked of the provider - /context costs nothing to run"
 	if rep.Measured > 0 {
 		foot = "shares scaled to the " + fmtTokens(rep.Measured) + " prompt the provider last charged for"
 	}

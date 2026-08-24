@@ -18,7 +18,7 @@ import (
 
 // Palette. 256-colour so the greys have somewhere to live: the design leans on
 // five levels of quiet (ink, muted, think, faint, ghost) and spends saturation
-// only on the three things worth looking at — who is speaking, what a tool is,
+// only on the three things worth looking at - who is speaking, what a tool is,
 // and whether it worked.
 var (
 	cInk   = fg(252)
@@ -53,7 +53,7 @@ var (
 
 	// Source, for the one place the screen shows code rather than talks about
 	// it: the patch on a write or edit prompt. Four colours and a quiet one for
-	// punctuation — enough to give a hunk its shape, few enough that the diff's
+	// punctuation - enough to give a hunk its shape, few enough that the diff's
 	// own colours still read as the loudest thing on it.
 	sKeyword = fg(140)
 	sString  = fg(107)
@@ -70,7 +70,7 @@ var (
 	}
 
 	// The comet: the newest characters of a line still being written, brightest
-	// at the end. It does not animate — the text arriving underneath it is the
+	// at the end. It does not animate - the text arriving underneath it is the
 	// movement, and nothing looks laggier than an effect racing the content.
 	cometRamp = []string{fg(246), fg(248), fg(250), fg(252), fg(254), fg(255)}
 
@@ -97,7 +97,7 @@ var (
 const (
 	bold      = "\x1b[1m"
 	italic    = "\x1b[3m"
-	styleOff  = "\x1b[22;23;39m" // weight, slant and foreground — never the background
+	styleOff  = "\x1b[22;23;39m" // weight, slant and foreground - never the background
 	bgOff     = "\x1b[49m"       // ...and the one escape that does close a background
 	reverse   = "\x1b[7m"
 	revOff    = "\x1b[27m"
@@ -119,7 +119,7 @@ const (
 )
 
 // bodyW is the shared measure every block renders to, so the feed has one right
-// edge as well as one left one — prose stops where the boxes stop.
+// edge as well as one left one - prose stops where the boxes stop.
 func (m *model) bodyW() int { return min(m.width-marginW, measure) }
 
 // Cache keys for the two things a keypress can change about a rendering.
@@ -150,7 +150,7 @@ func vw(s string) int { return ansi.StringWidth(s) }
 
 // shimmerCells is how fast the band travels, in cells per second. Taken from
 // the clock rather than the frame counter, so the glide is the same speed
-// whatever the repaint rate happens to be — a dropped frame costs a frame, not
+// whatever the repaint rate happens to be - a dropped frame costs a frame, not
 // a hitch in the animation.
 const shimmerCells = 24.0
 
@@ -216,8 +216,8 @@ func cometSpans(line []span, elapsed time.Duration) []span {
 const gradientCells = 9.0
 
 // gradient lays a moving colour ramp along a string, one colour per cell. It
-// writes an escape per character, so it is for labels and bars — a few dozen
-// cells — and never for prose.
+// writes an escape per character, so it is for labels and bars - a few dozen
+// cells - and never for prose.
 func gradient(s string, ramp []string, elapsed time.Duration) string {
 	if len(ramp) == 0 || s == "" {
 		return s
@@ -237,7 +237,7 @@ func gradient(s string, ramp []string, elapsed time.Duration) string {
 	return b.String()
 }
 
-// pulse alternates between two tones on a fixed period — used where a spinner
+// pulse alternates between two tones on a fixed period - used where a spinner
 // would be too loud but something still has to say "running".
 func pulse(dim, bright string, elapsed, period time.Duration) string {
 	if period <= 0 || (elapsed/period)%2 == 0 {
@@ -345,8 +345,8 @@ func fmtTokens(n int) string {
 // gauge draws the context meter, as spent out of the whole.
 //
 // The worker reports what a round actually cost and, when it knows the model's
-// window, the size of it. When it does not — an unlisted model, a local one
-// nobody has told it about — there is no denominator to draw against, and the
+// window, the size of it. When it does not - an unlisted model, a local one
+// nobody has told it about - there is no denominator to draw against, and the
 // gauge says how much has been spent rather than inventing a total to divide by.
 // A meter reading against a made-up number is worse than no meter.
 func (m *model) gauge() string {
@@ -367,7 +367,7 @@ func (m *model) gauge() string {
 	frac := min(max(float64(used)/float64(total), 0), 1)
 
 	// The bar fills as the window is spent, so a full bar is the thing to worry
-	// about — and the colour arrives before it does.
+	// about - and the colour arrives before it does.
 	tone, num := cOK, cMuted
 	switch {
 	case frac > 0.85:
@@ -409,7 +409,7 @@ func shortModel(id string) string {
 
 // modelChip says who is answering. It is the one thing the bar carries that is
 // not about this run: everything else changes minute to minute, and this only
-// changes when you change it — which is exactly why it is worth having in front
+// changes when you change it - which is exactly why it is worth having in front
 // of you when you read the rest.
 func (m *model) modelChip() string {
 	name := shortModel(m.modelID)
@@ -431,7 +431,7 @@ func (m *model) modelChip() string {
 // It is live. While the round streams, the worker estimates the rate from the
 // characters it has sent, and a tilde says so; when the provider bills the round
 // the measured figure replaces it and the tilde goes. The distinction is worth
-// the one cell it costs — an estimate that presented itself as a measurement
+// the one cell it costs - an estimate that presented itself as a measurement
 // would be believed.
 func (m *model) rateSeg() string {
 	st := m.status
@@ -522,8 +522,8 @@ func pick(left, right []seg, gone bool) *seg {
 }
 
 // fitBar trims the bar to the terminal and then puts back what the trimming
-// overshot. Trimming is coarse — one reading can free far more room than was
-// missing — so a second pass offers everything that was dropped back in order
+// overshot. Trimming is coarse - one reading can free far more room than was
+// missing - so a second pass offers everything that was dropped back in order
 // of how much it was worth keeping, and takes whatever still fits. Without it a
 // wide bar can lose a long reading to a shortfall of three cells.
 func (m *model) fitBar(left, right []seg) (row, rhs string, gap int) {
@@ -561,7 +561,7 @@ func (m *model) fitBar(left, right []seg) (row, rhs string, gap int) {
 }
 
 // renderStatus draws the bar between feed and input. The left half is this run
-// — what it is doing, for how long, and how much of it went wrong — and the
+// - what it is doing, for how long, and how much of it went wrong - and the
 // right half is the conversation it belongs to.
 func (m *model) renderStatus() string {
 	st := m.status.State
@@ -612,7 +612,7 @@ func (m *model) renderStatus() string {
 		left = append(left, seg{text: paint(cMuted, "effort ") + paint(cInk, m.effort), drop: 4})
 	}
 	// The two toggles, shown only in the state you have to have pressed a key to
-	// get to — so a feed that looks wrong has its reason on the bar.
+	// get to - so a feed that looks wrong has its reason on the bar.
 	if m.showThinking {
 		left = append(left, seg{text: paint(cGhost, "thinking"), drop: 6})
 	}
@@ -779,11 +779,11 @@ func (m *model) renderInput() []string {
 // It deliberately stops at the end of the text rather than padding out to the
 // right edge. Padding was there to keep a repaint from leaving stale cells
 // behind, but the renderer already erases to the end of a line whose tail has
-// gone blank — and a line padded with real spaces is a line whose spaces the
+// gone blank - and a line padded with real spaces is a line whose spaces the
 // terminal hands over when you select it, so every copied paragraph came out
 // dragging a rectangle of whitespace behind it.
 //
-// Trailing spaces go with it, wherever in the styling they happen to sit —
+// Trailing spaces go with it, wherever in the styling they happen to sit -
 // except the ones that are visible in their own right. The status bar pads
 // itself and its blanks carry a background; the cursor is a space in reverse
 // video. Both are content, not padding.
@@ -865,7 +865,7 @@ func trimTrailing(s string) string {
 //
 // Nothing may push the frame past that height. A frame one row too tall makes
 // the terminal scroll, which moves every earlier row up instead of over-writing
-// it — so the screen fills with the wreckage of previous frames and no amount
+// it - so the screen fills with the wreckage of previous frames and no amount
 // of redrawing takes them away. The chrome is therefore trimmed until it fits,
 // rather than the feed being clamped to a minimum and the total left to grow.
 func (m *model) layout() (feedH int, overlay, input []string) {
@@ -880,7 +880,7 @@ func (m *model) layout() (feedH int, overlay, input []string) {
 		case len(input) > 1:
 			// From the top: the last row is the one the cursor is most likely
 			// on, and above it sit the attachment tray and the earliest
-			// wrapped lines — the parts of the message already written.
+			// wrapped lines - the parts of the message already written.
 			input = input[1:]
 		default:
 			// The row with the cursor on it, for the same reason.
@@ -904,7 +904,7 @@ func (m *model) render() string {
 	h, overlay, input := m.layout()
 
 	// The feed fills from the top and grows down, the way a log does. Once it
-	// outgrows the area the window follows the end of it instead — so its
+	// outgrows the area the window follows the end of it instead - so its
 	// scroll is measured back from the end.
 	//
 	// The inspector is the other kind of thing: a page, which starts at its

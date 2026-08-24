@@ -1,7 +1,7 @@
 // Command deck is a terminal frontend for the computer-use agent, built as an
 // action tape rather than a chat log. Prose and thinking stream into the feed;
 // each batch of tool calls is drawn as its own box, so what the agent did to
-// the machine — in what order, and whether it worked — reads at a glance.
+// the machine - in what order, and whether it worked - reads at a glance.
 //
 // main.go is the wiring. feed.go owns the block model and the feed rendering,
 // calls.go decodes the tool payloads, view.go draws the frame.
@@ -279,7 +279,7 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 // Typed while a run is going it is a mid-turn message, not the next turn: the
 // worker holds it back and speaks it into the round already in flight, after
 // the tool results, which is the only place a user message is legal for every
-// provider. Everything below the echo is skipped in that case — the run it
+// provider. Everything below the echo is skipped in that case - the run it
 // would start is the one already running, and resetting its clock or reopening
 // its call group would report the wrong thing about it.
 func (m *model) send(text string) tea.Cmd {
@@ -362,8 +362,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showThinking = !m.showThinking
 		m.rebuild()
 
-	// The terminal's own paste key cannot carry a picture — Cmd+V hands over
-	// the clipboard's *text*, which for an image is nothing — so reading the
+	// The terminal's own paste key cannot carry a picture - Cmd+V hands over
+	// the clipboard's *text*, which for an image is nothing - so reading the
 	// real clipboard needs a key of our own. Off the UI goroutine: it shells
 	// out, and a clipboard that takes a moment must not stop the screen.
 	case msg.Code == 'v' && ctrl:
@@ -384,7 +384,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.rebuild()
 
 	// The row says what a call was; this says what it sent and what came back.
-	// Offered while a call is still running too — that is when "what is it
+	// Offered while a call is still running too - that is when "what is it
 	// actually doing" gets asked.
 	case msg.Code == 'o' && ctrl:
 		m.openInspector()
@@ -406,7 +406,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.input, m.cursor = m.input[:0], 0
 
-		// The word is the switch. It is never sent anywhere — typing it is the
+		// The word is the switch. It is never sent anywhere - typing it is the
 		// whole interface, and typing it again puts things back.
 		if strings.EqualFold(text, ultracodeWord) {
 			m.toggleUltra()
@@ -417,8 +417,8 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case msg.Code == tea.KeySpace:
 		m.insert(' ')
-		// The space is how a path typed by a terminal ends — Terminal.app puts
-		// one after every dropped file — so it is where a drop is finished
+		// The space is how a path typed by a terminal ends - Terminal.app puts
+		// one after every dropped file - so it is where a drop is finished
 		// enough to look at, and it goes with the path when one is found.
 		m.absorbTypedAt(m.cursor-1, 1)
 
@@ -493,7 +493,7 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // absorbTyped takes a just-completed image path off the buffer, and says so.
-// Shared by the two ways one arrives — typed by a terminal that does not use
+// Shared by the two ways one arrives - typed by a terminal that does not use
 // bracketed paste, and pasted by one that does.
 func (m *model) absorbTyped() { m.absorbTypedAt(m.cursor, 0) }
 
@@ -511,7 +511,7 @@ func (m *model) absorbTypedAt(end, trail int) {
 
 // handleInspectKey drives the open call: up and down through it, left and right
 // between calls, escape back to the feed. Everything else is swallowed rather
-// than typed — the input row is not on screen to receive it.
+// than typed - the input row is not on screen to receive it.
 func (m *model) handleInspectKey(msg tea.KeyPressMsg, ctrl bool) {
 	switch {
 	case msg.Code == tea.KeyEsc, msg.Code == 'o' && ctrl, msg.Code == 'q' && !ctrl:
@@ -522,7 +522,7 @@ func (m *model) handleInspectKey(msg tea.KeyPressMsg, ctrl bool) {
 	case msg.Code == tea.KeyRight:
 		m.stepInspector(1)
 
-	// The inspector reads top-down, so its arrows do too — down goes further
+	// The inspector reads top-down, so its arrows do too - down goes further
 	// into the page, which is the opposite of the feed's arrows walking back up
 	// a conversation.
 	case msg.Code == tea.KeyUp:
@@ -541,8 +541,8 @@ func (m *model) handleInspectKey(msg tea.KeyPressMsg, ctrl bool) {
 }
 
 // flattenPaste folds every run of whitespace in pasted text down to a single
-// space and drops control characters. Spacing at the edges is kept — a paste
-// dropped between two words has to stay between them — but nothing that would
+// space and drops control characters. Spacing at the edges is kept - a paste
+// dropped between two words has to stay between them - but nothing that would
 // submit the line early, or move the cursor, survives.
 func flattenPaste(s string) string {
 	var b strings.Builder
@@ -635,8 +635,8 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 	if ev.ParseErr == nil {
 		m.status = ev.Snapshot
 		// The window as the worker states it, when it knows the model's size.
-		// When it does not, the largest reading ever taken stands in for full —
-		// it is the one from when the least had been consumed — which is the
+		// When it does not, the largest reading ever taken stands in for full -
+		// it is the one from when the least had been consumed - which is the
 		// only denominator available to a worker that reports what is left and
 		// nothing else.
 		if m.status.ContextMax > 0 {
@@ -724,7 +724,7 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 
 // Update is the wrapper; update below is the real one. Everything that can
 // change the conversation's name goes through it, and the tab title is written
-// here rather than at each of those points — there are a dozen of them and only
+// here rather than at each of those points - there are a dozen of them and only
 // one string that matters.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.update(msg)
@@ -736,8 +736,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // titleCmd names the tab, when that name has changed.
 //
-// The window title is set from View, and on iTerm2 — and any terminal that
-// draws tabs — that is not the string on the tab. The tab reads the icon name,
+// The window title is set from View, and on iTerm2 - and any terminal that
+// draws tabs - that is not the string on the tab. The tab reads the icon name,
 // OSC 1, which bubbletea's View does not write, so it falls back to naming the
 // tab after the job on the tty. Written through tea.Raw so it goes out on the
 // event loop, in order with the renderer's own writes, rather than racing them
@@ -801,7 +801,7 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.PasteMsg:
 		// A file dropped on the window arrives here in most terminals: as the
 		// path, pasted. Tried as paths first, and only as text when every word
-		// in it is not one — a paste that is mostly prose is prose.
+		// in it is not one - a paste that is mostly prose is prose.
 		if atts, err := absorbPaste(msg.Content); err != nil {
 			m.notice(cWarn, err.Error())
 			m.rebuild()
@@ -814,8 +814,8 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Bracketed paste arrives whole. Newlines would submit a line at a
 		// time, so they fold into spaces and the paste stays one message.
 		m.insert([]rune(flattenPaste(msg.Content))...)
-		// A path can also be pasted into the middle of a sentence — dropped on
-		// a window with something already typed in it — which the all-or-
+		// A path can also be pasted into the middle of a sentence - dropped on
+		// a window with something already typed in it - which the all-or-
 		// nothing read above deliberately does not take.
 		m.absorbTyped()
 
@@ -853,12 +853,12 @@ func (m *model) View() tea.View {
 	// writes this as OSC 2 and clears it on the way out, so the shell's own
 	// title comes back when the program does.
 	//
-	// This is the window, not the tab. The tab is a separate string — see
+	// This is the window, not the tab. The tab is a separate string - see
 	// titleCmd, which writes it.
 	v.WindowTitle = windowTitle(m.title)
 	// The wheel has to be ours. Left to the terminal it scrolls the terminal's
 	// own buffer instead of the feed, and a terminal that keeps scrollback for
-	// the alternate screen — iTerm2 does, by default — has a buffer full of the
+	// the alternate screen - iTerm2 does, by default - has a buffer full of the
 	// rows earlier frames pushed off the top, so the wheel walks back through
 	// the wreckage of old frames rather than through the conversation.
 	//
@@ -871,16 +871,16 @@ func (m *model) View() tea.View {
 // windowTitle is what the terminal calls its window and tab while deck is
 // running: the app, and the conversation in it once that conversation has a
 // name. Sanitized and clipped because the string ends up inside an escape
-// sequence — a newline in it would end the sequence early and leave the rest of
+// sequence - a newline in it would end the sequence early and leave the rest of
 // the name printed across the screen.
 func windowTitle(name string) string {
 	if name = strings.TrimSpace(sanitize(name)); name != "" {
-		return "cuacode — " + clip(name, 60)
+		return "cuacode - " + clip(name, 60)
 	}
 	return "cuacode"
 }
 
-const usage = `deck — terminal frontend for the cuacode agent
+const usage = `deck - terminal frontend for the cuacode agent
 
 usage:
   deck                 start a new conversation
@@ -939,8 +939,8 @@ func main() {
 		sess.Command("permission.mode", map[string]any{"mode": "ask"})
 	}
 
-	// Asked for before the loop starts, so the picker is already up — or the
-	// conversation already replaying — by the time the first frame is drawn.
+	// Asked for before the loop starts, so the picker is already up - or the
+	// conversation already replaying - by the time the first frame is drawn.
 	switch {
 	case resume && resumeID != "":
 		m.loading = true

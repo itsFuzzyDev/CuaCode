@@ -4,7 +4,7 @@ package main
 //
 // Permission is the one that matters: the worker blocks on the answer, so a
 // question that goes up must always come back down with a reply. Every exit
-// from the prompt answers it — there is no way to dismiss one unanswered.
+// from the prompt answers it - there is no way to dismiss one unanswered.
 
 import (
 	"encoding/json"
@@ -92,8 +92,8 @@ func (m *model) askPermission(id string, data json.RawMessage) {
 		key:     key,
 		scope:   scope,
 	}
-	// A file being created has no patch to show — there is nothing to diff it
-	// against — but its content is right here, and every line of it is new.
+	// A file being created has no patch to show - there is nothing to diff it
+	// against - but its content is right here, and every line of it is new.
 	if p.diff == "" && text(args, "action") == "write" {
 		p.content, _ = args["content"].(string)
 	}
@@ -191,7 +191,7 @@ var effortLadder = []struct {
 	{"low", "low", "a moment's thought before answering", cOK},
 	{"medium", "med", "thinks things through", cWarn},
 	{"high", "high", "works at it, and takes its time", cHot},
-	{"max", "max", "as far as it will go — expect to wait", cErr},
+	{"max", "max", "as far as it will go - expect to wait", cErr},
 }
 
 // effortRows is the selection model behind the meter: one option per rung, in
@@ -391,7 +391,7 @@ func (m *model) effortCaption(sel, width int) []string {
 		// setting that reads as "no thinking at all" and buys the cheapest
 		// thinking on offer.
 		return []string{margin + "  " + paint(cMuted, trunc(
-			shortModel(m.modelID)+" cannot stop thinking — this would quietly mean its lowest rung", width-2))}
+			shortModel(m.modelID)+" cannot stop thinking - this would quietly mean its lowest rung", width-2))}
 	}
 	line := rung.hint
 	if rung.name == m.effort {
@@ -405,7 +405,7 @@ func (m *model) effortCaption(sel, width int) []string {
 	}
 	label := "sends  " + sends
 	if sends == "" {
-		label = "sends nothing — " + shortModel(m.modelID) + " has no knob for this"
+		label = "sends nothing - " + shortModel(m.modelID) + " has no knob for this"
 	}
 	return append(rows, margin+"  "+paint(cGhost, trunc(label, width-2)))
 }
@@ -480,7 +480,7 @@ func (m *model) runCommand(name string) {
 
 	case "clear":
 		m.reset()
-		m.notice(cGhost, "feed cleared — the conversation itself is untouched")
+		m.notice(cGhost, "feed cleared - the conversation itself is untouched")
 
 	case "quit":
 		m.quitting = true
@@ -513,8 +513,8 @@ func (m *model) runCommand(name string) {
 		m.command("model.list", nil)
 
 	case "vision":
-		// Same reply as /provider — the worker has one listing and it carries
-		// everything both pickers need — so the flag says which one to open.
+		// Same reply as /provider - the worker has one listing and it carries
+		// everything both pickers need - so the flag says which one to open.
 		m.pickVision, m.probing = true, false
 		m.command("provider.list", nil)
 
@@ -677,7 +677,7 @@ func (m *model) openProviders(data json.RawMessage) {
 	var reply struct {
 		Providers []providerRow `json:"providers"`
 		// Which provider was named to look at images, and which one that
-		// actually resolves to right now — they differ when nothing was named,
+		// actually resolves to right now - they differ when nothing was named,
 		// or when what was named has since lost its key.
 		Named   string `json:"vision"`
 		Sighted string `json:"sighted"`
@@ -692,7 +692,7 @@ func (m *model) openProviders(data json.RawMessage) {
 	}
 
 	// Whichever listing this is, it is also the freshest word on who is
-	// answering — the status bar takes it from here rather than from the choice
+	// answering - the status bar takes it from here rather than from the choice
 	// that was made, because the worker is the one that decides what stuck.
 	var active providerRow
 	for _, p := range reply.Providers {
@@ -740,7 +740,7 @@ func (m *model) openProviders(data json.RawMessage) {
 			return
 		}
 		if reply.Named == "" && reply.Sighted != "" {
-			opts[0].hint = "whichever provider can see — now " + reply.Sighted
+			opts[0].hint = "whichever provider can see - now " + reply.Sighted
 		}
 		m.openOverlay(ovVision, "who looks at images?", opts, -1)
 		return
@@ -787,7 +787,7 @@ func (m *model) openParams(p providerRow) {
 	}
 	model := p.modelName()
 	if model == "" {
-		m.notice(cGhost, "no model set on "+p.Name+" — pick one with /model first")
+		m.notice(cGhost, "no model set on "+p.Name+" - pick one with /model first")
 		return
 	}
 	over := p.ModelParams[model]
@@ -834,8 +834,8 @@ func paramText(v any) string {
 	return string(b)
 }
 
-// paramValue reads what was typed. JSON first — 0.7, true and [1,2] all mean
-// what they look like — and a bare word that is not JSON stays a string,
+// paramValue reads what was typed. JSON first - 0.7, true and [1,2] all mean
+// what they look like - and a bare word that is not JSON stays a string,
 // because having to quote a word to send a word is a rule nobody remembers.
 func paramValue(s string) any {
 	var v any
@@ -847,7 +847,7 @@ func paramValue(s string) any {
 
 // openModels turns a model.list reply into a picker. The list comes from the
 // provider itself and can run to several hundred rows, which is what the
-// overlay's subsequence filter is for — type to narrow rather than scroll.
+// overlay's subsequence filter is for - type to narrow rather than scroll.
 func (m *model) openModels(data json.RawMessage) {
 	var reply struct {
 		Provider string   `json:"provider"`
@@ -863,7 +863,7 @@ func (m *model) openModels(data json.RawMessage) {
 	if !reply.Listed {
 		// Different from an empty catalog, and worth saying differently: the
 		// provider did not answer, so nothing was learned about what it has.
-		m.notice(cGhost, reply.Provider+" does not list its models — set one in config.json")
+		m.notice(cGhost, reply.Provider+" does not list its models - set one in config.json")
 		return
 	}
 

@@ -1,9 +1,9 @@
 ---
 name: writing-tools
-description: Add a new tool to CuaCode. Use only when working on the CuaCode repo itself — a tool is Python that runs in the worker, unlike subagents, workflows and skills, which live in ~/.cuacode.
+description: Add a new tool to CuaCode. Use only when working on the CuaCode repo itself - a tool is Python that runs in the worker, unlike subagents, workflows and skills, which live in ~/.cuacode.
 ---
 A tool is a folder in `tools/` with exactly three files. It is picked up on the
-next worker start — there is no registry to edit.
+next worker start - there is no registry to edit.
 
 This one changes the app itself. If the user wants a reusable *job*, they want
 a subagent or a workflow, which need no code and take effect immediately. Only
@@ -31,11 +31,11 @@ What it does, when to use it, and what it will not do. This is read by the
 model on every single turn, so it is worth writing tightly.
 ```
 
-- `output` — a sketch of the return shape, not a validated schema. One real
+- `output` - a sketch of the return shape, not a validated schema. One real
   use: any value mentioning `base64` marks the tool as image-returning, and it
   is withheld from models that cannot see.
-- `active` — `False` keeps it loaded but unoffered. Right for a stub.
-- `require_permissions` — `True` makes the frontend ask the user before every
+- `active` - `False` keeps it loaded but unoffered. Right for a stub.
+- `require_permissions` - `True` makes the frontend ask the user before every
   call. Set it for anything that changes the machine, spends money, or reaches
   the network.
 
@@ -53,7 +53,7 @@ model on every single turn, so it is worth writing tightly.
 Arguments are validated against this before `run` is called, so a missing or
 mistyped field never reaches the handler. Supported: `type`, `properties`,
 `required`, `enum`, `items`, `default`, `minItems`/`maxItems`. Defaults are
-*not* filled in — the handler's own `args.get(k, fallback)` stays authoritative.
+*not* filled in - the handler's own `args.get(k, fallback)` stays authoritative.
 
 Every `description` is an instruction to the model. Write them that way.
 
@@ -78,8 +78,8 @@ def run(args: dict, ctx) -> dict:
 
 ### Runtime description and schema
 
-If what the tool offers depends on the machine — which subagents are installed,
-which workflows exist — define either hook in `main.py`:
+If what the tool offers depends on the machine - which subagents are installed,
+which workflows exist - define either hook in `main.py`:
 
 ```python
 def describe(body: str) -> str: ...   # body is Description.md's text

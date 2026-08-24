@@ -4,7 +4,7 @@
 // both want.
 //
 // It lives under core/ because both frontends need it and they need it to
-// behave identically — a file the terminal refuses and the window accepts is a
+// behave identically - a file the terminal refuses and the window accepts is a
 // bug report nobody can reproduce.
 package attach
 
@@ -31,8 +31,8 @@ type Image struct {
 	Mime string `json:"mime"`
 }
 
-// MaxImage is the largest Image accepted. The limit is not the wire —
-// the worker's stdin takes a line of any length — it is the round trip: an
+// MaxImage is the largest Image accepted. The limit is not the wire -
+// the worker's stdin takes a line of any length - it is the round trip: an
 // 8MB photo is ~11MB of base64 re-uploaded on every round of the turn, and a
 // model reads a 1024px picture just as well.
 const MaxImage = 8 << 20
@@ -89,7 +89,7 @@ func ReadFile(path string) (Image, error) {
 		return Image{}, fmt.Errorf("%s is a directory", filepath.Base(path))
 	}
 	if info.Size() > MaxImage {
-		return Image{}, fmt.Errorf("%s is %s — the limit is %s",
+		return Image{}, fmt.Errorf("%s is %s - the limit is %s",
 			filepath.Base(path), FmtBytes(int(info.Size())), FmtBytes(MaxImage))
 	}
 	b, err := os.ReadFile(path)
@@ -105,7 +105,7 @@ func FromBytes(name string, b []byte) (Image, error) {
 		return Image{}, fmt.Errorf("%s is not a png, jpeg, gif or webp", name)
 	}
 	if len(b) > MaxImage {
-		return Image{}, fmt.Errorf("%s is %s — the limit is %s",
+		return Image{}, fmt.Errorf("%s is %s - the limit is %s",
 			name, FmtBytes(len(b)), FmtBytes(MaxImage))
 	}
 	return Image{Name: name, B64: base64.StdEncoding.EncodeToString(b),
@@ -161,7 +161,7 @@ var errNoImage = fmt.Errorf("no image on the clipboard")
 
 // clipScript is AppleScript because the pasteboard is: `pbpaste` deals in text
 // and has no flag that will hand over a PNG. The three classes are tried in
-// the order that keeps the most information — a copied file keeps its name, a
+// the order that keeps the most information - a copied file keeps its name, a
 // PNG needs no conversion, and TIFF is what Preview and the older apps put
 // there and has to be turned into something a provider accepts.
 const clipScript = `on run argv

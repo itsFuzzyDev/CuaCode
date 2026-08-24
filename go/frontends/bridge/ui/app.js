@@ -9,7 +9,7 @@
 //
 // Nothing here is a framework. There is no diff, no reconciliation and no
 // component tree, because the feed only ever appends and the one thing that
-// mutates — a tool call waiting for its result — already knows which row it is.
+// mutates - a tool call waiting for its result - already knows which row it is.
 
 const feed   = document.getElementById('feed');
 const input  = document.getElementById('input');
@@ -50,7 +50,7 @@ window.__cua = {
 };
 
 // Nobody can open an inspector inside the app's window, so an uncaught error is
-// silence — the feed simply stops growing and nothing says why. Put it where the
+// silence - the feed simply stops growing and nothing says why. Put it where the
 // one person who can act on it will see it.
 window.addEventListener('error', e => {
   try {
@@ -103,7 +103,7 @@ function tail(kind) {
 }
 
 // stream appends a chunk to the trailing block of that kind. The text node is
-// extended in place — the browser reuses the existing layout for everything
+// extended in place - the browser reuses the existing layout for everything
 // before the insertion point, which is the whole reason a long answer stays
 // cheap to keep on screen.
 function stream(kind, chunk) {
@@ -161,7 +161,7 @@ const APP_NAME = 'CuaCode';
 // asked for rather than assumed.
 function setTitle(name) {
   name = sanitize(name || '').trim();
-  const full = name ? APP_NAME + ' — ' + clip(name, 60) : APP_NAME;
+  const full = name ? APP_NAME + ' - ' + clip(name, 60) : APP_NAME;
   document.title = full;
   if (typeof goTitle === 'function') goTitle(full);
 }
@@ -252,7 +252,7 @@ function fold(ev, loading) {
       notice('call', 'backgrounded · ' + ev.token + ' is still running');
       break;
 
-    // Runtime text put into the conversation — neither the user's nor the
+    // Runtime text put into the conversation - neither the user's nor the
     // model's. Only the first paragraph is shown: the rest is instruction
     // addressed to the model, and on screen it would read as the agent talking
     // to itself.
@@ -263,8 +263,8 @@ function fold(ev, loading) {
       break;
     }
 
-    // Mid-run readings. Nothing goes in the feed for either — the status bar
-    // already moved — but they carry what the round's thinking is costing, and
+    // Mid-run readings. Nothing goes in the feed for either - the status bar
+    // already moved - but they carry what the round's thinking is costing, and
     // the thinking they are pricing is on screen above.
     case 'rate':
     case 'usage':
@@ -291,7 +291,7 @@ function fold(ev, loading) {
       notice('err', 'error: ' + clip(sanitize(ev.token || ev.err || ''), 400));
       // A turn the connection ended rather than the model. What streamed before
       // it went is still on screen and still in the history, so the next message
-      // carries on from it instead of starting over — which is only obvious if
+      // carries on from it instead of starting over - which is only obvious if
       // it is said.
       if (ev.data && ev.data.kept) notice('warn', 'partial reply kept · say anything to carry on');
       finish();
@@ -322,7 +322,7 @@ function fold(ev, loading) {
     // What this conversation is called, from whoever called it that: a stub off
     // the first message, the namer a turn or two later, the agent, or the
     // session that was just reopened. It is the window title, so all four
-    // matter — see setTitle.
+    // matter - see setTitle.
     case 'session_title': {
       const d = ev.data || {};
       setTitle(d.title || '');
@@ -398,8 +398,8 @@ function finish() {
 
 // ------------------------------------------------------------------ the DOM
 
-// build makes the element for a block once. Everything that changes later —
-// streamed text, a call's result, a thinking block's price — is written into a
+// build makes the element for a block once. Everything that changes later -
+// streamed text, a call's result, a thinking block's price - is written into a
 // node this function has already put in place.
 function build(b) {
   const el = document.createElement('div');
@@ -647,7 +647,7 @@ async function attach(files) {
   }
   for (const f of wanted) {
     if (f.size > MAX_IMAGE) {
-      notice('warn', f.name + ' is ' + fmtBytes(f.size) + ' — the limit is ' + fmtBytes(MAX_IMAGE));
+      notice('warn', f.name + ' is ' + fmtBytes(f.size) + ' - the limit is ' + fmtBytes(MAX_IMAGE));
       continue;
     }
     try {
@@ -729,7 +729,7 @@ function shotsOf(shots) {
 
 // A file dropped anywhere on the window lands on the next message. Anywhere,
 // because the target of the gesture is the conversation and not a rectangle in
-// it — and preventDefault on both events, because a webview's default answer to
+// it - and preventDefault on both events, because a webview's default answer to
 // a dropped file is to navigate the window to it, which ends the session.
 document.addEventListener('dragover', e => {
   e.preventDefault();
@@ -752,8 +752,8 @@ document.addEventListener('drop', e => {
 //
 // Two ways, because one of them is not reliable here. A browser puts the
 // picture in clipboardData and this is over in a line. A webview often does
-// not — WKWebView hands over an empty file list for an image copied by
-// anything but itself — and an empty event is indistinguishable from an
+// not - WKWebView hands over an empty file list for an image copied by
+// anything but itself - and an empty event is indistinguishable from an
 // ordinary text paste. So when the event carries nothing, Go is asked, using
 // the same OS-level reader the terminal frontend uses.
 document.addEventListener('paste', e => {
@@ -892,7 +892,7 @@ function scrollToBottom() {
 //   openai     {"id": ..., "function": {"name": ..., "arguments": "<json>"}}
 //   anthropic  {"type": "tool_use", "id": ..., "name": ..., "input": {...}}
 //
-// Anything unrecognised is kept visible rather than dropped — a silent empty
+// Anything unrecognised is kept visible rather than dropped - a silent empty
 // round would be worse than an ugly one.
 function parseCalls(raw) {
   raw = (raw || '').trim();
@@ -998,7 +998,7 @@ function formatArgs(name, m) {
 
 // resultText summarises one tool_output payload into the short text for the
 // result column, the failure detail that earns its own row, and whether the
-// call succeeded — a dispatch failure comes back as {"error": ...} in place of
+// call succeeded - a dispatch failure comes back as {"error": ...} in place of
 // {"result": ...}.
 function resultText(name, data) {
   const fine = { short: 'ok', note: '', ok: true };
@@ -1040,7 +1040,7 @@ function resultText(name, data) {
       if (r.ok === false) return { short: 'failed', note: '', ok: false };
       break;
 
-    // The worker keeps the page — or the skill's instructions — off the wire
+    // The worker keeps the page - or the skill's instructions - off the wire
     // and sends the size instead, the same way it does for images.
     case 'WebFetch':
     case 'skill':
@@ -1066,7 +1066,7 @@ function resultText(name, data) {
       break;
 
     // A non-zero exit is the command's own failure, not a dispatch error, so it
-    // never arrives as {"error": ...} — read it off the exit code.
+    // never arrives as {"error": ...} - read it off the exit code.
     case 'shell':
       if (r.timeout === true) return { short: 'timeout', note: '', ok: false };
       if (has(r, 'exit_code') && r.exit_code !== 0) {
@@ -1187,8 +1187,8 @@ go('goReady');
 // ---------------------------------------------------------------- the demo
 
 // ?demo replays a scripted conversation through the same entry point the worker
-// uses, so the page can be looked at — in a browser, by a person or by anything
-// driving one — without Python, a window, or a mock of the UI standing in for
+// uses, so the page can be looked at - in a browser, by a person or by anything
+// driving one - without Python, a window, or a mock of the UI standing in for
 // the UI. What it draws here is what it draws in the app.
 //
 // It exists because a GUI is the one part of this program that cannot report on
@@ -1246,7 +1246,7 @@ function chunks(text, n) {
 // The tray is not part of the conversation, so the fixture cannot put anything
 // in it: a worker never sends an attachment *to* a frontend, it only receives
 // one. It is still part of what the app looks like, so the demo draws a couple
-// of chips — painted here rather than pasted in as base64, which would put a
+// of chips - painted here rather than pasted in as base64, which would put a
 // picture of a picture in the source.
 function demoTray() {
   pending = [

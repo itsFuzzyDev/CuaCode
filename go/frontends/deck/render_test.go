@@ -25,7 +25,7 @@ var script = []string{
 	`{"type":"token","id":"msg-1","data":{"state":"tool_output","token":"app_open","result":{"result":{"ok":true,"app":"Safari"}},"status":"tooling"}}`,
 	`{"type":"token","id":"msg-1","data":{"state":"tool_output","token":"screenshot","result":{"result":{"n":1}},"status":"tooling"}}`,
 	`{"type":"token","id":"msg-1","data":{"state":"tool_output","token":"click","result":{"error":"screen coordinates out of range for display 0"},"status":"tooling"}}`,
-	`{"type":"token","id":"msg-1","data":{"state":"content","token":"Address bar is focused. Typing the query now — this line is deliberately long so it has to wrap under its gutter at every width the test tries.","status":"running"}}`,
+	`{"type":"token","id":"msg-1","data":{"state":"content","token":"Address bar is focused. Typing the query now - this line is deliberately long so it has to wrap under its gutter at every width the test tries.","status":"running"}}`,
 	`{"type":"token","id":"msg-1","data":{"state":"tool_calls","token":[{"id":"call_1","type":"function","function":{"name":"type_text","arguments":"{\"text\":\"otters, and a good deal more text than fits in a narrow column\"}"}},{"type":"tool_use","id":"call_2","name":"key","input":{"combo":"Return"}}],"status":"tooling"}}`,
 	`{"type":"token","id":"msg-1","data":{"state":"tool_output","token":"type_text","result":{"result":{"typed":"otters"}},"status":"tooling"}}`,
 	`{"type":"token","id":"msg-1","data":{"state":"tool_output","token":"key","result":{"result":{"pressed":"Return"}},"status":"tooling"}}`,
@@ -36,7 +36,7 @@ var script = []string{
 
 // Markdown the model might plausibly send back. \x60 is a backtick, which a raw
 // string literal cannot hold.
-var mdProse = "Done — the results are on screen.\n\n" +
+var mdProse = "Done - the results are on screen.\n\n" +
 	"## What I did\n\n" +
 	"- opened \x60Safari\x60 with **app_open**\n" +
 	"- typed the query, then pressed \x60Return\x60\n\n" +
@@ -78,7 +78,7 @@ func plainOf(s string) string { return ansiRe.ReplaceAllString(s, "") }
 // terminal, at every width, in every toggle state. A row one cell too wide is a
 // box that no longer closes.
 //
-// Rows are allowed to stop short of the right edge — they are not padded out to
+// Rows are allowed to stop short of the right edge - they are not padded out to
 // it, so that selecting text in the terminal does not pick up a rectangle of
 // trailing spaces. The status bar is the one row that must fill the width,
 // because its blanks carry a background.
@@ -369,8 +369,8 @@ func TestNoControlChars(t *testing.T) {
 	}
 }
 
-// TestKeys drives the model the way the program does — real messages through
-// Update — so the bindings are checked against the key codes bubbletea
+// TestKeys drives the model the way the program does - real messages through
+// Update - so the bindings are checked against the key codes bubbletea
 // actually delivers, not against the ones the switch happens to name.
 func TestKeys(t *testing.T) {
 	m := initialModel()
@@ -382,7 +382,7 @@ func TestKeys(t *testing.T) {
 		step(parse(t, line))
 	}
 
-	// The whole feed, not just the visible window — these assertions are about
+	// The whole feed, not just the visible window - these assertions are about
 	// what a toggle produced, not about where the viewport happens to sit.
 	frame := func() string { return plainOf(strings.Join(m.wrapped, "\n")) }
 
@@ -445,7 +445,7 @@ func TestKeys(t *testing.T) {
 
 // TestFormatting checks the one property the formatter must never break: the
 // markers are gone from the text, the styling is real, and no line is wider
-// than the width it was given — at every width, including absurd ones.
+// than the width it was given - at every width, including absurd ones.
 func TestFormatting(t *testing.T) {
 	for _, w := range []int{4, 8, 12, 20, 40, 78} {
 		for _, line := range formatProse(mdProse, w) {
@@ -646,8 +646,8 @@ func TestFrame(t *testing.T) {
 
 // TestCodeFieldsDrawnAsCode is the inspector's half of what the permission
 // prompt already did: a file call's patch is a patch and its text is code,
-// wherever they are read. The alternative — the same bytes as a grey paragraph
-// under a gutter — is what sends people to `git diff` to find out what the
+// wherever they are read. The alternative - the same bytes as a grey paragraph
+// under a gutter - is what sends people to `git diff` to find out what the
 // agent just changed.
 func TestCodeFieldsDrawnAsCode(t *testing.T) {
 	edit := map[string]any{

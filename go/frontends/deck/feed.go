@@ -1,15 +1,15 @@
 package main
 
 // The feed is a list of blocks, not a list of lines. A block owns its own
-// shape — prose wraps under a hanging indent, a batch of tool calls draws a
-// box, thinking collapses to one line — and caches the rows it renders to
+// shape - prose wraps under a hanging indent, a batch of tool calls draws a
+// box, thinking collapses to one line - and caches the rows it renders to
 // until something invalidates them. Lines only ever come from blocks.
 //
 // One alignment rule holds the design together: every block's text starts in
 // the same column, and only the two marker cells to its left change. The
 // model's prose is the baseline and carries no marker at all, so everything
-// that is *not* the answer — what you asked, what it thought, what it did to
-// the machine — is what catches the eye.
+// that is *not* the answer - what you asked, what it thought, what it did to
+// the machine - is what catches the eye.
 
 import (
 	"encoding/json"
@@ -49,7 +49,7 @@ const (
 //
 // arg is what the row shows; args is what was actually sent, kept verbatim for
 // the inspector. index is where the worker filed the result, and what the
-// inspector asks for it by — -1 until the call settles, because until then
+// inspector asks for it by - -1 until the call settles, because until then
 // there is no record to ask about.
 type act struct {
 	name    string
@@ -69,12 +69,12 @@ type block struct {
 
 	// What a user message had attached to it, by name. Names, because a
 	// terminal cannot draw the picture and the filename is the whole of what
-	// it can say — and because that is all a reopened conversation sends back.
+	// it can say - and because that is all a reopened conversation sends back.
 	files []string
 
 	acts       []act
 	start, end time.Time
-	open       bool // still collecting results — the header clock ticks
+	open       bool // still collecting results - the header clock ticks
 
 	// The two readouts that draw a page of numbers rather than text: what is in
 	// the window now, and what every conversation has cost. Held as the worker
@@ -201,7 +201,7 @@ func (m *model) notice(tone, text string) {
 }
 
 // reset empties the feed. Used when the conversation on screen stops being the
-// conversation the worker holds — a new session, a loaded one, or /clear. The
+// conversation the worker holds - a new session, a loaded one, or /clear. The
 // masthead is put back rather than cleared: it is what the screen looks like
 // with nothing in it, and the keys are worth having in front of you at exactly
 // the moment the screen just emptied.
@@ -231,7 +231,7 @@ func (m *model) reset() {
 }
 
 // effortOf reads the level back off a status. The worker is the authority on
-// what it ended up as — it validates the value and can reject it — so the menu
+// what it ended up as - it validates the value and can reject it - so the menu
 // never records the choice itself.
 func effortOf(data json.RawMessage) string {
 	var reply struct {
@@ -299,7 +299,7 @@ func (m *model) fold(ev session.Event) {
 		m.notice(cCall, "backgrounded · "+p.Token+" is still running")
 
 	case "notice":
-		// Runtime text put into the conversation — neither the user's nor the
+		// Runtime text put into the conversation - neither the user's nor the
 		// model's. Only the first paragraph is shown: the rest is instruction
 		// addressed to the model, and on screen it would read as the agent
 		// talking to itself.
@@ -307,8 +307,8 @@ func (m *model) fold(ev session.Event) {
 		m.boundary()
 		m.notice(cCall, sanitize(head))
 
-	// Mid-run readings. Nothing goes in the feed for either — the status bar
-	// already moved — but they carry what the round's thinking is costing, and
+	// Mid-run readings. Nothing goes in the feed for either - the status bar
+	// already moved - but they carry what the round's thinking is costing, and
 	// the thinking they are pricing is on screen above. "rate" is the live
 	// estimate, "usage" the count the provider actually charged.
 	case "rate", "usage":
@@ -346,7 +346,7 @@ func (m *model) fold(ev session.Event) {
 		m.notice(cErr, "error: "+clip(sanitize(msg), 400))
 		// A turn the connection ended rather than the model. What streamed
 		// before it went is still on screen and still in the history, so the
-		// next message carries on from it instead of starting over — which is
+		// next message carries on from it instead of starting over - which is
 		// only obvious if it is said.
 		var kept struct {
 			Kept bool `json:"kept"`
@@ -382,7 +382,7 @@ func (m *model) fold(ev session.Event) {
 		// What this conversation is called, from whoever called it that: a stub
 		// off the first message, the namer a turn or two later, the agent, or
 		// the session that was just reopened. Kept because it is the window
-		// title — see windowTitle — and the terminal would otherwise be naming
+		// title - see windowTitle - and the terminal would otherwise be naming
 		// the process instead of the work.
 		var reply struct {
 			Title  string `json:"title"`
@@ -432,7 +432,7 @@ func (m *model) fold(ev session.Event) {
 // It runs twice over: once per live rate while the thought is still being
 // written, and again from the provider's own count when the round is billed. So
 // the figure is there during the wait, which is when it is worth having, and
-// correct afterwards. The walk stops at the last user message — a round reports
+// correct afterwards. The walk stops at the last user message - a round reports
 // its own thinking, and an earlier turn's must never be relabelled with this
 // one's number.
 func (m *model) priceThinking(ev session.Event) {
@@ -530,7 +530,7 @@ func (m *model) live(b *block) bool {
 	return n > 0 && b == m.blocks[n-1] && session.Busy(m.status.State)
 }
 
-// rowsFor returns a block's rows, rendering only when the cache is stale — so
+// rowsFor returns a block's rows, rendering only when the cache is stale - so
 // an animation frame costs one block, not the whole feed.
 func (m *model) rowsFor(b *block, flags uint8) []string {
 	live := m.live(b)
@@ -576,7 +576,7 @@ func (m *model) renderBlock(b *block, flags uint8, live bool) []string {
 // feed, with no marker of its own. While it is still being written the last
 // line carries the comet, which is the only moving thing on a quiet screen.
 //
-// An animation frame only re-renders that last line — the layout above it is
+// An animation frame only re-renders that last line - the layout above it is
 // held, so the cost of a frame is a line, not a message.
 func (m *model) renderProse(b *block, live bool) []string {
 	width := m.bodyW() - 3
@@ -829,7 +829,7 @@ func (m *model) renderCalls(b *block, collapsed, fullArgs bool) []string {
 
 // argRows spells a call's arguments out under its row, in the key column the
 // permission prompt and the inspector both use. The row's own argument cell is
-// a shape — enough to tell two calls apart at a glance — and this is the same
+// a shape - enough to tell two calls apart at a glance - and this is the same
 // call with nothing left out, for when the shape is not what you needed.
 //
 // They come from the tool_calls payload the feed already holds, so they are

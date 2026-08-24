@@ -3,7 +3,7 @@ package main
 // One widget serves all three menus: the permission prompt, the slash-command
 // palette, and the @file picker. They differ only in what fills the list and
 // what happens on Enter, so they share the filtering, the selection, the key
-// handling and the drawing — and there is only one place where a menu can get
+// handling and the drawing - and there is only one place where a menu can get
 // its geometry wrong.
 
 import (
@@ -69,7 +69,7 @@ type overlay struct {
 	bodyMax  int  // ...and how far it can be scrolled, as of the last draw
 
 	// The body, rendered. Cached because it is rebuilt on every frame otherwise
-	// — twice, once to measure and once to draw — and parsing a thousand-line
+	// - twice, once to measure and once to draw - and parsing a thousand-line
 	// patch twenty times a second to show ten of its rows is work nobody asked
 	// for.
 	body  []string
@@ -91,7 +91,7 @@ func (m *model) openOverlay(kind overlayKind, title string, opts []option, ancho
 func (m *model) closeOverlay() { m.ov = overlay{} }
 
 // refilter recomputes the visible rows. Matching is subsequence-based, so "sn"
-// finds "session.new" — the usual thing a palette does.
+// finds "session.new" - the usual thing a palette does.
 func (o *overlay) refilter() {
 	needle := strings.ToLower(o.filter)
 	o.shown = o.shown[:0]
@@ -153,7 +153,7 @@ func (o *overlay) move(n int) {
 // shortened by exactly that much and nothing overlaps. It is the length of what
 // renderOverlay actually produces rather than a second calculation of it: the
 // two agreeing is what keeps the frame the right height, and a menu that draws
-// itself differently — the effort meter — cannot get that wrong here.
+// itself differently - the effort meter - cannot get that wrong here.
 func (m *model) overlayHeight() int { return len(m.renderOverlay()) }
 
 // renderOverlay draws the menu directly above the input row. It returns exactly
@@ -245,8 +245,8 @@ func (m *model) renderOverlay() []string {
 // permBodyRows draws what the call would do, above the choices.
 //
 // Three shapes, in order of how much they tell you. A write or an edit has a
-// patch, and a patch is what gets drawn — line numbers, tinted changes, the
-// code coloured — because that is the thing being approved and a paragraph of
+// patch, and a patch is what gets drawn - line numbers, tinted changes, the
+// code coloured - because that is the thing being approved and a paragraph of
 // grey text is not it. A file being created has no patch but has its content,
 // which is the same picture with every line arriving. Everything else gets its
 // arguments in the key column the inspector uses.
@@ -271,7 +271,7 @@ func (m *model) permBodyRows(o *overlay, width int) []string {
 
 	// Everything on screen that is not the block: the title, the blank under
 	// it, three choices, the trailing blank, the input row and the two the
-	// frame always takes — and the summary, which is counted separately
+	// frame always takes - and the summary, which is counted separately
 	// because a call without one does not have it.
 	const chrome = 9
 	budget := max(m.height-chrome-len(head), 1)
@@ -321,7 +321,7 @@ func (m *model) permBody(o *overlay, width int) []string {
 // bodyFoot is the line under a block too long to show whole: where you are in
 // it, and the keys that move you.
 func (o *overlay) bodyFoot(window, total int) string {
-	pos := itoa(o.bodyAt+1) + "–" + itoa(o.bodyAt+window) + " of " + itoa(total)
+	pos := itoa(o.bodyAt+1) + "-" + itoa(o.bodyAt+window) + " of " + itoa(total)
 	size := "ctrl+o taller"
 	if o.expanded {
 		size = "ctrl+o smaller"
@@ -330,7 +330,7 @@ func (o *overlay) bodyFoot(window, total int) string {
 }
 
 // scrollBody moves the window over the call's body. The choices keep the plain
-// arrows — the prompt is a question first — so the block gets the modified
+// arrows - the prompt is a question first - so the block gets the modified
 // ones, and the page keys, which nothing else on a permission prompt wants.
 func (o *overlay) scrollBody(n int) {
 	o.bodyAt = min(max(o.bodyAt+n, 0), o.bodyMax)
@@ -338,7 +338,7 @@ func (o *overlay) scrollBody(n int) {
 
 // scrollPermBody is the same thing from a keypress, which can arrive before the
 // prompt has ever been drawn. How far there is to scroll is a drawing decision,
-// so the drawing is asked for first — it is cached, so asking costs nothing.
+// so the drawing is asked for first - it is cached, so asking costs nothing.
 func (m *model) scrollPermBody(n int) {
 	m.permBodyRows(&m.ov, m.bodyW())
 	m.ov.scrollBody(n)
@@ -606,7 +606,7 @@ func (m *model) chooseMenu() {
 		// one. Caught here as well so the menu stays up on the rung you are
 		// standing on rather than closing and answering back with an error.
 		if !m.effortOK(opt.value) {
-			m.notice(cGhost, shortModel(m.modelID)+" cannot stop thinking — nothing here turns it off")
+			m.notice(cGhost, shortModel(m.modelID)+" cannot stop thinking - nothing here turns it off")
 			return
 		}
 		m.closeOverlay()

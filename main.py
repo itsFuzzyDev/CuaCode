@@ -751,7 +751,7 @@ while True:
                         idx = tool_ordinal(sess)
                         sess.add_tool(name, result)
                         if name in ("screenshot", "photos"):
-                            # Keep IPC payload under ~75 chars — images live in messages, not the wire
+                            # Keep IPC payload under ~75 chars - images live in messages, not the wire
                             count = result.get("count", 1)
                             ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": {"n": count}, "index": idx, "status": "tooling"})
                         elif name in ("WebFetch", "agent", "workflow", "skill", "describe_image") and isinstance(result.get("result"), dict):

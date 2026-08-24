@@ -2,7 +2,7 @@ package main
 
 // The inspector: one tool call, in full.
 //
-// The feed is an action tape — a call is a row, and a row is a name, a short
+// The feed is an action tape - a call is a row, and a row is a name, a short
 // argument and a result word. That is the right density for watching a run and
 // the wrong one for answering "what did it actually send, and what came back".
 // This is the other half: the same call, opened.
@@ -10,7 +10,7 @@ package main
 // It reads from two places, because the two halves of a call arrive
 // differently. The arguments cross the wire in full on the tool_calls event and
 // are already held in the block model, so they are on screen the moment the
-// inspector opens — including for the call running right now, which is exactly
+// inspector opens - including for the call running right now, which is exactly
 // when you want to see them. The result does not cross the wire: the worker
 // sends a size where a build log or a web page would be, on purpose, so it is
 // asked for by index (tool.detail) and filled in when it lands.
@@ -77,7 +77,7 @@ func (m *model) closeInspector() {
 }
 
 // stepInspector walks to another call, holding at the ends rather than wrapping
-// — a list you can fall off the end of is a list you lose your place in.
+// - a list you can fall off the end of is a list you lose your place in.
 func (m *model) stepInspector(d int) {
 	calls := m.callList()
 	if len(calls) == 0 {
@@ -118,8 +118,8 @@ func (m *model) fetchDetail(a act) {
 }
 
 // refreshInspector asks for the open call's record as soon as it has one. The
-// inspector is worth opening on a call that is still running — the arguments
-// are there from the start — and this is what fills the other half in when it
+// inspector is worth opening on a call that is still running - the arguments
+// are there from the start - and this is what fills the other half in when it
 // lands, without the user having to leave the page and come back.
 func (m *model) refreshInspector() {
 	if !m.insp.on {
@@ -135,7 +135,7 @@ func (m *model) refreshInspector() {
 	}
 }
 
-// waiting reports whether the open call has something on its way — a result, or
+// waiting reports whether the open call has something on its way - a result, or
 // the record of one. The animation clock runs while it does, so the spinner on
 // the page is not left frozen mid-turn by an otherwise idle screen.
 func (m *model) inspectWaiting() bool {
@@ -150,7 +150,7 @@ func (m *model) inspectWaiting() bool {
 }
 
 // takeDetail files a worker answer. It arrives whether or not the inspector is
-// still on the call that asked for it — the answer is kept either way, because
+// still on the call that asked for it - the answer is kept either way, because
 // the next visit to that call should not have to ask again.
 func (m *model) takeDetail(data json.RawMessage) {
 	var reply struct {
@@ -436,9 +436,9 @@ func blockRows(s string, width, depth int) []string {
 	return rows
 }
 
-// plain makes stored text safe to lay out. Tabs become spaces — a tab measures
+// plain makes stored text safe to lay out. Tabs become spaces - a tab measures
 // no cells at all, so one left in place puts every column after it somewhere
-// the layout did not account for — and control characters go. Newlines stay:
+// the layout did not account for - and control characters go. Newlines stay:
 // they are what makes a block a block.
 func plain(s string) string {
 	var b strings.Builder
