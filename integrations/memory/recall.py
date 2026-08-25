@@ -5,6 +5,13 @@ the sentence that says what it is -- and the model decides whether to spend a
 tool call opening it. That asymmetry is the whole design: a wrong pointer costs
 a line, a wrong injected body costs the context and, worse, gets acted on.
 
+A pointer only earns its line if it names something the model does not already
+have. The memory tool's own description lists every in-scope memory every turn,
+so pointing at one of those is a line spent restating the tool list -- and a
+block that is mostly restatement teaches the model to skim the whole thing.
+Memories here are therefore drawn from what the index leaves out: another
+project's, or an app's that is not on screen.
+
 Runs on every user message, so it is lexical and structural only. No model
 call, no network, no embedding: this sits between the user pressing enter and
 the request going out, and anything that takes a second there is felt on every
@@ -19,6 +26,7 @@ from integrations.memory import loader
 
 MAX_MEMORIES = 3
 MAX_SESSIONS = 2
+MIN_TURNS = 2             # a one-turn session is a question and an answer, not a thing to reopen
 # Two bars, because the two corpora are not alike. A memory's description is a
 # sentence someone wrote to be recognised by, and there are tens of them, so one
 # solid word is real evidence. Session titles are generated, there are hundreds,
@@ -98,7 +106,9 @@ def forget(sid: str):
     _shown.pop(sid or "-", None)
 
 def _memory_hits(q: set, path: str, apps: list) -> list:
-    mems = loader.in_scope(path, apps)
+    # Out of scope on purpose -- see the module docstring. Everything in scope is
+    # already listed in the memory tool's description on this very request.
+    mems = loader.out_of_scope(path, apps)
     if not mems: return []
     docs = [tokens(f"{m.name} {m.description} {m.type}") for m in mems]
     w = _weights(docs)
@@ -107,7 +117,14 @@ def _memory_hits(q: set, path: str, apps: list) -> list:
         # The name is the fact's identity -- someone chose those words to be the
         # handle for exactly this -- so matching one counts for more than
         # matching the same word somewhere in the sentence.
-        s = _score(q, d, w) + 0.5 * len(q & set(tokens(m.name)))
+        named = len(q & set(tokens(m.name)))
+        # One shared word is not a match, it is a coincidence -- the same reason
+        # session titles need a higher bar. It reads as evidence here only
+        # because rarity weight is measured against this handful of memories, so
+        # any word occurring once scores as if it were decisive. A hit on the
+        # name is the exception: those words were chosen to be searched for.
+        if not named and len(q & set(d)) < 2: continue
+        s = _score(q, d, w) + 0.5 * named
         if s >= MIN_MEMORY: out.append((s, m))
     return sorted(out, key=lambda p: -p[0])
 
@@ -120,7 +137,8 @@ def _session_hits(q: set, path: str, sid: str, deictic: bool) -> list:
     """
     here = os.path.abspath(os.path.expanduser(path)) if path else ""
     metas = [m for m in store.list_sessions()[:SESSION_POOL]
-             if m.get("id") != sid and (m.get("title") or m.get("cwd"))]
+             if m.get("id") != sid and (m.get("title") or m.get("cwd"))
+             and int(m.get("turns") or 0) >= MIN_TURNS]
     if not metas: return []
     docs = [tokens(" ".join([m.get("title", ""), os.path.basename(m.get("cwd", "") or ""),
                              " ".join(os.path.basename(f.get("path", "")) for f in (m.get("read_files") or [])[:20])]))
@@ -142,44 +160,60 @@ def _session_hits(q: set, path: str, sid: str, deictic: bool) -> list:
         if s >= MIN_SESSION: out.append((s, m))
     return sorted(out, key=lambda p: -p[0])
 
-def block(text: str, sid: str = "", path: str = None, apps: list = None) -> str:
-    """The recall note for one user message, or "" when nothing matched.
+def block(text: str, sid: str = "", path: str = None, apps: list = None) -> list[str]:
+    """The recall notes for one user message. Empty list when nothing matched.
 
     Empty is the expected answer most turns. A block that appears every time is
     a block that gets read as furniture, and then the one that mattered is
     furniture too.
+
+    Two notes rather than one, because a memory and a past conversation are not
+    the same kind of thing: one is a fact someone wrote down to be reused, the
+    other is a place to go looking. Under one heading the reader has to sort
+    them apart before deciding anything, and the frontend draws each note on its
+    own row anyway.
     """
     q = set(tokens(text))
-    if not q and not DEIXIS.search(text or ""): return ""
+    if not q and not DEIXIS.search(text or ""): return []
     path = path if path is not None else loader.cwd()
     deictic = bool(DEIXIS.search(text or ""))
 
-    lines = []
+    mem, ses = [], []
     try:
         for s, m in _memory_hits(q, path, apps):
-            if len(lines) >= MAX_MEMORIES: break
-            if _fresh(sid, f"m:{m.name}"): lines.append(f"- memory `{m.name}` - {m.description}")
+            if len(mem) >= MAX_MEMORIES: break
+            if _fresh(sid, f"m:{m.name}"): mem.append(f"- `{m.name}` [{m.scope}] - {m.description}")
     except Exception: pass
-    n = 0
     try:
         for s, meta in _session_hits(q, path, sid, deictic):
-            if n >= MAX_SESSIONS: break
+            if len(ses) >= MAX_SESSIONS: break
             if not _fresh(sid, f"s:{meta['id']}"): continue
             title = (meta.get("title") or "").strip() or "untitled"
             where = "same directory" if (path and meta.get("cwd") and
                                          os.path.abspath(meta["cwd"]) == os.path.abspath(path)) else ""
             tail = ", ".join(x for x in (f"{meta.get('turns', 0)} turns", _ago(meta.get("updated", "")), where) if x)
-            lines.append(f"- session `{meta['id']}` \"{title}\" - {tail}")
-            n += 1
+            ses.append(f"- `{meta['id']}` \"{title}\" - {tail}")
     except Exception: pass
 
-    if not lines: return ""
     # The first paragraph is a sentence for the human -- frontends draw a
     # notice's opening paragraph and drop the rest, because the rest is
     # addressed to the model and reads on screen like the agent muttering.
-    return (f"recall: {len(lines)} possibly related item{'s' if len(lines) > 1 else ''}, not loaded\n\n"
-            "<recall>\n"
-            "Matched against your names and titles by word overlap alone. Nothing here has been\n"
-            "read, and a match is not evidence of relevance. Open one with the memory tool if it\n"
-            "bears on what was asked; ignore the rest silently -- do not mention them.\n"
-            + "\n".join(lines) + "\n</recall>")
+    out = []
+    if mem:
+        out.append(f"recall: {len(mem)} {'memory' if len(mem) == 1 else 'memories'} outside this scope\n\n"
+                   "<recall-memories>\n"
+                   "Memories that your tool list does *not* carry here -- they belong to another\n"
+                   "project or to an app that is not on screen, so this is the only mention of them\n"
+                   "you will get. Matched by word overlap on the name and the line, which is a guess.\n"
+                   "Nothing has been read. `memory` with action `load` opens one; ignore the rest\n"
+                   "silently -- do not mention them.\n"
+                   + "\n".join(mem) + "\n</recall-memories>")
+    if ses:
+        out.append(f"recall: {len(ses)} earlier session{'' if len(ses) == 1 else 's'} that may be related\n\n"
+                   "<recall-sessions>\n"
+                   "Past conversations, matched on their titles, directories and the files they read.\n"
+                   "A match is a guess, not evidence. `memory` with action `session` and the id reads\n"
+                   "one back as text if it bears on what was asked; ignore the rest silently -- do not\n"
+                   "mention them.\n"
+                   + "\n".join(ses) + "\n</recall-sessions>")
+    return out

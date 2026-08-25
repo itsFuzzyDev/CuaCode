@@ -529,16 +529,20 @@ while True:
             # which is what makes the memory index the *right* project's.
             sess.set_cwd(ctx.get("cwd") or "")
             memory.set_cwd(ctx.get("cwd") or "")
+            # And what is on screen, so an app's memories are listed by the tool
+            # while that app is frontmost instead of waiting for the user to
+            # type its name.
+            memory.set_apps([ctx.get("frontmost_app") or ""])
             # Pointers to things already known that look related. Appended to
             # the user's own message rather than sent as a second one: two user
             # messages in a row is a 400 on anthropic, and this is a note about
             # that message anyway. Never allowed to fail a turn -- a recall
             # block is a convenience, and no convenience gets to eat a message.
             try:
-                note = recall.block(text, sid=sess.id, path=ctx.get("cwd") or "",
-                                    apps=[ctx.get("frontmost_app") or ""])
+                notes = recall.block(text, sid=sess.id, path=ctx.get("cwd") or "",
+                                     apps=[ctx.get("frontmost_app") or ""])
             except Exception:
-                note = ""
+                notes = []
             # The same treatment for documentation sitting in the working
             # directory: names and sizes, never bodies, and at most twice in a
             # conversation. Separate from recall because the two answer different
@@ -563,7 +567,7 @@ while True:
             # is folded into it rather than sent as another. Spent as it is used
             # -- a turn is only interrupted once, and a note repeated on every
             # turn after would read as a fresh stop each time.
-            for extra in (pending_note, note, docs, skill_block):
+            for extra in (pending_note, *notes, docs, skill_block):
                 if not extra: continue
                 sess.add_recall(extra)
                 providers.append_user_text(messages[-1], extra)
