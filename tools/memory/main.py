@@ -8,6 +8,7 @@ the system prompt stays a fixed thing that providers can cache.
 """
 import os
 
+from handler.session import store
 from integrations.memory import loader, naming
 
 def _index() -> str:
@@ -46,6 +47,10 @@ def run(args: dict, ctx) -> dict:
             m = loader.get(args["name"])
             loader.touch(m.name)
             return {"memory": m.full()}
+
+        if action == "session":
+            if not args.get("id"): return {"error": "id required"}
+            return store.transcript(args["id"])
 
         if action == "search":
             if not args.get("query"): return {"error": "query required"}

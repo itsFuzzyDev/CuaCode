@@ -4,6 +4,7 @@ output:
   memories: list
   memory: object
   results: list
+  transcript: string
 active: True
 require_permissions: False
 ---
@@ -13,6 +14,10 @@ The list below is everything in scope, as a name and one line. That is all you
 carry - `load` reads one in full when the line suggests it matters. Loading one
 you did not need costs context for nothing; acting on a fact you half-remember
 from the line alone costs more.
+
+The list is rebuilt every turn and it is complete for where you are, so nothing
+in scope needs looking for. `search` is for the rest: another project's memories,
+or an app's that is not on screen.
 
 Write one when you learn something that will still be true next week and that
 nothing else would tell you:
@@ -45,6 +50,11 @@ you standing orders by being written down.
 
 Never store a credential, key, token or password. Those live in config, not
 here.
+
+`session` reads an earlier conversation back as text - what was asked and what
+was answered, with tool calls kept as names and their results dropped. Use it on
+an id a recall note gave you, when what happened there is what the question is
+about. It is the tail of the conversation, not all of it.
 
 `rename_session` retitles the conversation you are in. The title is what this
 session is found by later, so set it when the subject turns out to be something

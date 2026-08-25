@@ -34,12 +34,14 @@ SCOPE_RE = re.compile(r"^(global|(projects|apps)/[a-z0-9][a-z0-9._-]{0,63})$")
 TYPES = ("user", "feedback", "project", "app", "reference")
 SOURCES = ("user", "agent", "external")
 
-# Where the current turn is happening. Set once per turn by the loop, because
-# the two callers that need it -- the tool's own description and the recall
-# block -- are both called from places that never see a ctx. Falls back to the
-# worker's own cwd, which is right often enough and wrong harmlessly: the worst
-# case is an index scoped to the wrong project, not a path escape.
+# Where the current turn is happening, and what is on screen while it happens.
+# Set once per turn by the loop, because the two callers that need them -- the
+# tool's own description and the recall block -- are both called from places
+# that never see a ctx. cwd falls back to the worker's own, which is right often
+# enough and wrong harmlessly: the worst case is an index scoped to the wrong
+# project, not a path escape.
 _CWD = ""
+_APPS: list[str] = []
 
 def set_cwd(path: str):
     global _CWD
@@ -47,6 +49,13 @@ def set_cwd(path: str):
 
 def cwd() -> str:
     return _CWD or os.getcwd()
+
+def set_apps(names: list):
+    global _APPS
+    _APPS = [str(n) for n in (names or []) if n]
+
+def apps() -> list[str]:
+    return list(_APPS)
 
 def root() -> Path:
     d = store.home() / "memory"
@@ -140,12 +149,18 @@ def in_scope(path: str = None, apps: list = None) -> list[Memory]:
     Global always, this project always, an app's memories only when that app is
     named. Everything else stays on disk and is still reachable through search
     -- out of scope means unlisted, never unavailable.
+
+    `apps` left as None means whatever the loop last saw on screen, the same way
+    `path` means whatever it last saw as the cwd. That default is what puts an
+    app's memories in the tool's index while that app is frontmost, rather than
+    leaving them to be found by a word the user happened to type. Pass `[]` to
+    mean no app at all.
     """
     want = {"global", scope_for(path)}
     # What is frontmost arrives as whatever the platform calls it -- "Safari",
     # "com.apple.Safari", "Google Chrome" -- and the scope was named by hand.
     # Matched on the pieces so the two do not have to have agreed in advance.
-    here = {p for a in (apps or []) if a
+    here = {p for a in (_APPS if apps is None else apps) if a
             for p in re.sub(r"[^a-z0-9]+", "-", str(a).lower()).strip("-").split("-") if p}
     out = []
     for m in all_memories().values():
@@ -155,6 +170,18 @@ def in_scope(path: str = None, apps: list = None) -> list[Memory]:
             app = m.scope.split("/", 1)[1]
             if app in here or any(part in here for part in app.split("-")): out.append(m)
     return sorted(out, key=lambda m: (m.scope != "global", m.name))
+
+def out_of_scope(path: str = None, apps: list = None) -> list[Memory]:
+    """What the index is not already carrying.
+
+    The memory tool's description lists every in-scope memory, name and line,
+    and it is rebuilt every turn -- so a pointer naming one of those spends a
+    line to repeat something the model is already looking at. The only memories
+    a pointer can actually add are the rest: another project's, or an app's that
+    is not on screen.
+    """
+    listed = {m.name for m in in_scope(path, apps)}
+    return [m for m in all_memories().values() if m.name not in listed]
 
 def get(name: str) -> Memory:
     found = all_memories()

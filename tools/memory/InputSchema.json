@@ -1,10 +1,12 @@
 {
     "properties": {
         "action": {"type": "string",
-            "enum": ["list", "load", "search", "write", "delete", "rename_session"],
+            "enum": ["list", "load", "search", "write", "delete", "session", "rename_session"],
             "description": "Operation to perform"},
         "name": {"type": "string",
             "description": "Memory name, lowercase-with-dashes (load, write, delete)"},
+        "id": {"type": "string",
+            "description": "Session id, exactly as a recall pointer gave it (session)"},
         "description": {"type": "string",
             "description": "One line saying what this memory is. Always in context, so it has to earn the line (write)"},
         "body": {"type": "string",
