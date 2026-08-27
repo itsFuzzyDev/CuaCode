@@ -38,21 +38,30 @@ worker (python, line-delimited JSON)
   └─ core/protocol  parses one line into a typed Event
       └─ core/session  applies it, updates the Snapshot, calls notify
           └─ pump.emit   (bridge) queues it, coalesces, one batch per frame
-              └─ window.__cua.push({events, status, loading})   ← the only way in
+              └─ window.__cua.push({session, events, status, loading})   ← the only way in
                   └─ fold(ev)  turns one event into feed
 ```
 
 `window.__cua.push` is the **single entry point**. Everything the page displays
 arrives through it. Nothing else may mutate the feed - not a timer, not a
 callback, not the demo. If you need a new thing on screen, it comes from a worker
-event, which means it comes through `fold()`.
+event, which means it comes through `fold()`. The one exception is the window
+`error` handler, which reports a page failure directly because it has to work
+even when the feed machinery itself is broken.
+
+The batch carries a `session` id, because the app is a workspace: several
+sessions run at once, each a separate worker process with its own pump, and the
+page routes each batch to that session's feed. A batch without an id belongs to
+the active session. The page keeps one feed per session in the DOM and shows only
+the active one - `display:none` does not lay out, so a background session's feed
+costs nothing to keep, and switching to it is one layout, not a re-render.
 
 Going the other way, the page calls Go through `go('goSend', text)` and friends.
 The bindings are declared in `main.go`:
 
 | binding | does |
 |---|---|
-| `goSend(text)` | send a user message |
+| `goSend(text)` | send a user message to the active session |
 | `goSendWith(text, images)` | the same, with `[{name, b64}]` attached |
 | `goClipboard()` | → the picture on the system clipboard, or a rejection |
 | `goCancel()` | stop the run in flight |
@@ -61,6 +70,9 @@ The bindings are declared in `main.go`:
 | `goTitle(title)` | name the OS window - the webview does not follow `document.title` |
 | `goReply(id, type, fields)` | answer a worker prompt |
 | `goReady()` | the page can be evaluated into; flushes what was held |
+| `goNewSession()` | start a fresh worker, make it active; → its id |
+| `goSwitch(id)` | make a session active |
+| `goClose(id)` | close a session; → the next active id |
 
 Always call them through the `go()` helper, never `window.goSend(...)` directly.
 Served on its own the page has no bindings, and `go()` is what lets it still run.
@@ -146,9 +158,17 @@ go build -o bridge ./frontends/bridge && ./bridge --serve
 - `?demo` replays a scripted conversation (`ui/fixture.js`) through the real
   `window.__cua.push`, at real speed. Open it in a browser to watch streaming,
   the live amber bar, and results settling.
+- `?demo=name` picks a scenario: `long` (a session long enough to scroll),
+  `resumed` (the reopened-session banner and a names-only replay), `cancelled`
+  (a run stopped mid-tool, red rail), `folded` (thinking unfolded, calls
+  folded), `workspace` (two sessions at once, switched between, so the tabs and
+  per-session feeds show).
 - `?demo&fast` collapses every wait and applies each batch synchronously, so the
   conversation is complete before the load event. Screenshots of it are
   deterministic.
+- `?demo&stop` halts at the first batch marked `stop` in the fixture, leaving a
+  batch of calls open - the one live state a finished replay cannot show. This
+  is how the amber bar and pending rows are photographed.
 
 Headless screenshot:
 
@@ -175,14 +195,6 @@ an inspector inside the app's window. If the feed stops growing, look there.
 
 ## Known gaps
 
-- **Live states are not capturable headlessly.** `?demo&fast` finishes before the
-  screenshot, so it can only photograph settled states; the amber breathing bar
-  and a batch mid-flight can be watched in `?demo` by eye but not captured. If
-  you need that, add a fixture stop point that halts the replay with a batch
-  still open.
-- `ui/fixture.js` covers one short conversation. It does not cover a long
-  session, a resumed session, a cancelled run, or a folded/unfolded pass. Extend
-  it rather than testing by hand.
 - No packaging (`.app` / `.exe` / AppImage) and no native menus. `webview_go`
   provides neither. If those become required, the UI ports to Wails untouched -
   that is the point of keeping the page free of Go-specific assumptions.
@@ -193,14 +205,15 @@ an inspector inside the app's window. If the feed stops growing, look there.
 ## Where things are
 
 ```
-main.go       wiring: flags, window, session, bindings, --serve
+main.go       wiring: flags, window, bindings, --serve
+workspace.go  the set of open sessions; each a worker process with its own pump
 pump.go       the one seam between worker and page; coalescing lives here
 assets.go     go:embed + the loopback origin
 pump_test.go  the coalescing contract
 ui/index.html the page shell and its CSP
-ui/app.css    tokens, the rail, the two-media split
+ui/app.css    tokens, the rail, the two-media split, the tabs
 ui/app.js     block model, fold(), rendering, tool decoding, the demo replay
-ui/fixture.js the scripted conversation ?demo replays
+ui/fixture.js the scripted conversations ?demo replays
 ```
 
 `ui/app.js` mirrors `frontends/deck`'s block model deliberately - `fold`,

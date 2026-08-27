@@ -62,9 +62,73 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ============================================================ the workspace */
+
+/* The tabs sit above the feed; the workspace is the scrollable middle. Each
+   session gets its own .feed inside it, and only the active one is shown. */
+.tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px var(--pad) 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 10px;
+  border: 1px solid var(--rail);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink-dim);
+  font: 11px/1 var(--mono);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+}
+.tab.active {
+  color: var(--ink-lit);
+  border-color: var(--rule);
+  background: var(--ground);
+}
+.tab-x {
+  border: 0;
+  background: none;
+  color: var(--ink-mute);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+.tab:hover .tab-x, .tab-x:focus-visible { opacity: 1; }
+.tab-x:hover { color: var(--fail); }
+.tab.add {
+  border-style: dashed;
+  color: var(--ink-mute);
+  padding: 4px 9px;
+}
+.tab.add:hover { color: var(--ink-dim); border-color: var(--rule); }
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
 /* ================================================================= the feed */
 
-.feed {
+.workspace .feed {
   height: 100%;
   padding: 26px var(--pad) 140px;
   overflow-y: auto;
@@ -88,10 +152,10 @@ html, body {
   background-position: calc(var(--pad) + var(--rail-x)) 0;
   background-attachment: local;
 }
-.feed::-webkit-scrollbar { width: 10px; }
-.feed::-webkit-scrollbar-thumb { background: var(--rail); border-radius: 5px; }
-.feed::-webkit-scrollbar-thumb:hover { background: var(--rule); }
-.feed::-webkit-scrollbar-track { background: transparent; }
+.workspace .feed::-webkit-scrollbar { width: 10px; }
+.workspace .feed::-webkit-scrollbar-thumb { background: var(--rail); border-radius: 5px; }
+.workspace .feed::-webkit-scrollbar-thumb:hover { background: var(--rule); }
+.workspace .feed::-webkit-scrollbar-track { background: transparent; }
 
 /* ================================================================= the rail */
 

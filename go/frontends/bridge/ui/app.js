@@ -11,24 +11,122 @@
 // component tree, because the feed only ever appends and the one thing that
 // mutates - a tool call waiting for its result - already knows which row it is.
 
-const feed   = document.getElementById('feed');
+const workspace = document.getElementById('workspace');
 const input  = document.getElementById('input');
 const tray   = document.getElementById('tray');
 const statusEl = document.getElementById('status');
+const tabsEl = document.getElementById('tabs');
 
 // --------------------------------------------------------------- the model
 
-let blocks     = [];    // the feed, in order
-let callsBlock = null;  // the batch still collecting results, if any
-let sawOutput  = false; // a result has landed since the last prose
-let callCount  = 0;
-let callFail   = 0;
-let status     = { State: 'idle' };
-let showThink  = false;
-let foldCalls  = false;
-let pinned     = true;  // stick to the bottom unless the user has scrolled away
-let runStart   = 0;
-let pending    = [];    // pictures attached to the message being typed
+// A session is one conversation: its feed, its stream state, its status. The
+// workspace holds several; `cur` is the one on screen. Everything below that
+// reads per-session state goes through `cur`, so a batch routed to a background
+// session folds into that session's feed without touching the one on screen.
+let sessions = {};
+let active   = null;
+let cur      = null;
+
+let showThink = false;  // view prefs, shared across sessions
+let foldCalls = false;
+
+function newSession(id) {
+  return {
+    id,
+    blocks: [],
+    callsBlock: null,
+    sawOutput: false,
+    callCount: 0,
+    callFail: 0,
+    status: { State: 'idle' },
+    runStart: 0,
+    pending: [],
+    pinned: true,  // stick to the bottom unless the user has scrolled away
+    title: '',
+    feed: null,
+  };
+}
+
+// sessionFor returns the session for an id, creating it (and its feed element)
+// on first use. A batch without an id belongs to the active session.
+function sessionFor(id) {
+  if (!id) id = active;
+  if (!sessions[id]) {
+    const s = newSession(id);
+    s.feed = document.createElement('div');
+    s.feed.className = 'feed';
+    s.feed.tabIndex = -1;
+    s.feed.addEventListener('scroll', () => {
+      s.pinned = s.feed.scrollTop + s.feed.clientHeight >= s.feed.scrollHeight - 28;
+    }, { passive: true });
+    workspace.appendChild(s.feed);
+    sessions[id] = s;
+  }
+  return sessions[id];
+}
+
+// switchTo shows one session's feed and hides the rest, and tells Go which
+// session is active so the bindings (goSend, goCancel, ...) route to the one on
+// screen. Without the call the two sides drift the moment a tab is clicked, and
+// a message typed in one session goes to another's worker.
+function switchTo(id) {
+  const s = sessionFor(id);
+  active = id;
+  cur = s;
+  go('goSwitch', id);
+  for (const [sid, ss] of Object.entries(sessions)) {
+    ss.feed.style.display = sid === id ? '' : 'none';
+  }
+  setTitle(s.title);
+  drawTabs();
+  drawStatus();
+  drawTray();
+  scrollToBottom();
+}
+
+// drawTabs renders the session switcher: one tab per open session, plus a "+"
+// to start another.
+function drawTabs() {
+  tabsEl.replaceChildren();
+  for (const [id, s] of Object.entries(sessions)) {
+    const tab = document.createElement('div');
+    tab.className = 'tab' + (id === active ? ' active' : '');
+    tab.title = id;
+    tab.addEventListener('click', () => switchTo(id));
+    tab.appendChild(span('', s.title || id));
+    const x = document.createElement('button');
+    x.className = 'tab-x';
+    x.textContent = '\u00d7';
+    x.title = 'close ' + id;
+    x.addEventListener('click', e => { e.stopPropagation(); closeSession(id); });
+    tab.appendChild(x);
+    tabsEl.appendChild(tab);
+  }
+  const add = document.createElement('button');
+  add.className = 'tab add';
+  add.textContent = '+';
+  add.title = 'new session';
+  add.addEventListener('click', addSession);
+  tabsEl.appendChild(add);
+}
+
+// addSession asks Go for a fresh worker, then shows it.
+function addSession() {
+  const id = go('goNewSession');
+  if (!id) return;
+  switchTo(id);
+}
+
+// closeSession closes a session on the Go side and drops its feed, then shows
+// whatever is left (or starts a fresh one if the last went).
+function closeSession(id) {
+  const next = go('goClose', id);
+  const s = sessions[id];
+  if (s) { s.feed.remove(); delete sessions[id]; }
+  if (next) switchTo(next);
+  else if (Object.keys(sessions).length) switchTo(Object.keys(sessions)[0]);
+  else addSession();
+}
 
 const TOOL_DRIVE = new Set(['click', 'type_text', 'key', 'scroll', 'mouse_move']);
 const TOOL_LOOK  = new Set(['screenshot', 'photos', 'app_list']);
@@ -73,16 +171,20 @@ function apply() {
   const batches = queued;
   queued = [];
 
-  const wasPinned = pinned;
   for (const b of batches) {
-    // Set before folding, not after: priceThinking reads the round's token
-    // count off it, and the reading belongs to the events in this batch.
-    status = b.status;
+    // Each batch belongs to one session; fold it there, then put the active
+    // session back before drawing, so the bar always reads the one on screen.
+    const s = sessionFor(b.session);
+    const prev = cur;
+    cur = s;
+    s.status = b.status;
     for (const ev of b.events) fold(ev, b.loading);
+    cur = prev;
   }
+  cur = sessions[active];
   drawStatus();
   tickIfBusy();
-  if (wasPinned) scrollToBottom();
+  if (cur.pinned) scrollToBottom();
 }
 
 // --------------------------------------------------------- block management
@@ -90,15 +192,15 @@ function apply() {
 function push(kind, opts) {
   const b = Object.assign({ kind, text: '', acts: [], open: false, start: 0 }, opts);
   b.el = build(b);
-  blocks.push(b);
-  feed.appendChild(b.el);
+  cur.blocks.push(b);
+  cur.feed.appendChild(b.el);
   return b;
 }
 
 // tail returns the last block if it is of the given kind, so streamed chunks
 // extend it instead of stacking up.
 function tail(kind) {
-  const b = blocks[blocks.length - 1];
+  const b = cur.blocks[cur.blocks.length - 1];
   return b && b.kind === kind ? b : null;
 }
 
@@ -119,31 +221,31 @@ function stream(kind, chunk) {
 // worker puts no batch marker on the wire, so the turn from tool results back
 // to prose is what separates one batch of calls from the next.
 function boundary() {
-  if (sawOutput) closeCalls();
+  if (cur.sawOutput) closeCalls();
 }
 
 function openCalls() {
-  if (!callsBlock) {
-    callsBlock = push('calls', { open: true, start: performance.now() });
+  if (!cur.callsBlock) {
+    cur.callsBlock = push('calls', { open: true, start: performance.now() });
   }
-  return callsBlock;
+  return cur.callsBlock;
 }
 
 function closeCalls() {
-  if (callsBlock) {
-    const b = callsBlock;
+  if (cur.callsBlock) {
+    const b = cur.callsBlock;
     b.open = false;
     b.end = performance.now();
     for (const a of b.acts) {
       if (a.state === 'pending') {
         settleRow(a, 'fail', 'no result', '');
-        callFail++;
+        cur.callFail++;
       }
     }
     drawCallsHead(b);
-    callsBlock = null;
+    cur.callsBlock = null;
   }
-  sawOutput = false;
+  cur.sawOutput = false;
 }
 
 function notice(tone, text) {
@@ -161,6 +263,7 @@ const APP_NAME = 'CuaCode';
 // asked for rather than assumed.
 function setTitle(name) {
   name = sanitize(name || '').trim();
+  cur.title = name;
   const full = name ? APP_NAME + ' - ' + clip(name, 60) : APP_NAME;
   document.title = full;
   if (typeof goTitle === 'function') goTitle(full);
@@ -170,7 +273,7 @@ function setTitle(name) {
 // re-parsing a growing message on every chunk is quadratic in its length, which
 // is exactly the shape of lag that gets worse the more the model says.
 function settleProse() {
-  for (const b of blocks) {
+  for (const b of cur.blocks) {
     if (b.kind === 'prose' && !b.marked && b.text) {
       b.body.innerHTML = inlineMarkdown(b.text);
       b.marked = true;
@@ -179,18 +282,18 @@ function settleProse() {
 }
 
 function reset() {
-  blocks = [];
-  callsBlock = null;
-  sawOutput = false;
-  callCount = 0;
-  callFail = 0;
-  feed.replaceChildren();
-  status.ContextUsed = 0;
-  status.ContextLeft = 0;
+  cur.blocks = [];
+  cur.callsBlock = null;
+  cur.sawOutput = false;
+  cur.callCount = 0;
+  cur.callFail = 0;
+  cur.feed.replaceChildren();
+  cur.status.ContextUsed = 0;
+  cur.status.ContextLeft = 0;
   // The window title names the conversation, and the conversation just went.
   setTitle('');
   // Attached to a message in a conversation that is no longer on screen.
-  pending = [];
+  cur.pending = [];
   drawTray();
   push('hint');
 }
@@ -211,15 +314,14 @@ function fold(ev, loading) {
       notice('', 'welcome!');
       break;
 
-    // Only ever seen while a reopened conversation replays: a live message is
-    // echoed into the feed when it is sent, not when it comes back.
+    // A live message is echoed through this same path (see send), so it carries
+    // its pictures; a reopened conversation is replayed without the payloads,
+    // so there is nothing to draw but the names. See main.py's replay().
     case 'user':
-      boundary();
-      closeCalls();
-      // Names only on this path: a reopened conversation is replayed without
-      // the payloads, so there is nothing to draw but what the files were
-      // called. See main.py's replay().
-      push('user', { text: ev.token || '', shots: (ev.images || []).map(i => ({ name: i.name })) });
+      // A message sent into a run in flight is spoken into that round, so the
+      // calls block stays open; one that starts a turn closes whatever is left.
+      if (!BUSY.has(cur.status.State)) { boundary(); closeCalls(); }
+      push('user', { text: ev.token || '', shots: (ev.images || []).map(i => ({ name: i.name, b64: i.b64 })) });
       break;
 
     case 'thinking':
@@ -235,14 +337,14 @@ function fold(ev, loading) {
       const calls = parseCalls(ev.token || '');
       const b = openCalls();
       for (const a of calls) addRow(b, a);
-      callCount += calls.length;
+      cur.callCount += calls.length;
       drawCallsHead(b);
       break;
     }
 
     case 'tool_output':
       settle(ev.token || '', ev.data);
-      sawOutput = true;
+      cur.sawOutput = true;
       break;
 
     // The call did not finish, it moved. Worth its own line: the row for it is
@@ -356,13 +458,13 @@ function fold(ev, loading) {
 // walk stops at the last user message: a round reports its own thinking, and an
 // earlier turn's must never be relabelled with this one's number.
 function priceThinking(ev) {
-  const n = num(status.ThinkTokens), rate = num(status.ThinkTPS);
+  const n = num(cur.status.ThinkTokens), rate = num(cur.status.ThinkTPS);
   if (n <= 0 && rate <= 0) return;
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
+  for (let i = cur.blocks.length - 1; i >= 0; i--) {
+    const b = cur.blocks[i];
     if (b.kind === 'user') return;
     if (b.kind === 'think') {
-      if (n > 0) { b.tokens = n; b.tokEst = !!status.ThinkEst; }
+      if (n > 0) { b.tokens = n; b.tokEst = !!cur.status.ThinkEst; }
       if (rate > 0) b.tps = rate;
       drawThinkHead(b);
       return;
@@ -375,7 +477,7 @@ function priceThinking(ev) {
 // right one; an unmatched result still gets a row rather than vanishing.
 function settle(name, data) {
   const r = resultText(name, data);
-  if (!r.ok) callFail++;
+  if (!r.ok) cur.callFail++;
 
   const b = openCalls();
   for (const a of b.acts) {
@@ -388,12 +490,12 @@ function settle(name, data) {
   const a = { name, arg: '', args: '', state: 'pending' };
   addRow(b, a);
   settleRow(a, r.ok ? 'ok' : 'fail', r.short, r.note);
-  callCount++;
+  cur.callCount++;
   drawCallsHead(b);
 }
 
 function finish() {
-  runStart = 0;
+  cur.runStart = 0;
 }
 
 // ------------------------------------------------------------------ the DOM
@@ -543,10 +645,10 @@ function settleRow(a, state, short, note) {
 let ticker = 0;
 
 function tickIfBusy() {
-  const busy = !!callsBlock || BUSY.has(status.State);
+  const busy = !!cur.callsBlock || BUSY.has(cur.status.State);
   if (busy && !ticker) {
     ticker = setInterval(() => {
-      if (callsBlock) drawCallsHead(callsBlock);
+      if (cur.callsBlock) drawCallsHead(cur.callsBlock);
       drawStatus();
     }, 90);
   } else if (!busy && ticker) {
@@ -574,25 +676,25 @@ const STATE_WORD = {
 const GAUGE_CELLS = 14;
 
 function drawStatus() {
-  const st = status.State || 'idle';
+  const st = cur.status.State || 'idle';
   const busy = BUSY.has(st);
   const frag = document.createDocumentFragment();
 
   frag.appendChild(span('state' + (busy ? ' busy' : st === 'error' ? ' err' : ''),
     STATE_WORD[st] || st));
 
-  if (callCount) {
-    frag.appendChild(span('', callCount + (callCount === 1 ? ' call' : ' calls')));
-    if (callFail) frag.appendChild(span('fail', callFail + ' failed'));
+  if (cur.callCount) {
+    frag.appendChild(span('', cur.callCount + (cur.callCount === 1 ? ' call' : ' calls')));
+    if (cur.callFail) frag.appendChild(span('fail', cur.callFail + ' failed'));
   }
-  if (runStart) frag.appendChild(span('', ((performance.now() - runStart) / 1000).toFixed(1) + 's'));
+  if (cur.runStart) frag.appendChild(span('', ((performance.now() - cur.runStart) / 1000).toFixed(1) + 's'));
 
-  const tps = num(status.TPS);
-  if (tps > 0) frag.appendChild(span('', tps.toFixed(0) + ' t/s' + (status.TPSEst ? '~' : '')));
+  const tps = num(cur.status.TPS);
+  if (tps > 0) frag.appendChild(span('', tps.toFixed(0) + ' t/s' + (cur.status.TPSEst ? '~' : '')));
 
   // Pushed to the right, and segmented rather than smooth: the only question it
   // answers is how much room is left, and a smooth bar reads as a download.
-  const used = num(status.ContextUsed), max = num(status.ContextMax);
+  const used = num(cur.status.ContextUsed), max = num(cur.status.ContextMax);
   if (max > 0 && used > 0) {
     const pct = Math.min(1, used / max);
     const wrap = span('gap', '');
@@ -615,9 +717,11 @@ function drawStatus() {
 
 // go calls into the Go side when there is one. Served on its own the page has
 // no bindings, and the demo replay drives it through window.__cua instead.
+// Returns the binding's value, so a call like go('goNewSession') can hand back
+// the new session id.
 function go(name, ...args) {
   const fn = window[name];
-  if (typeof fn === 'function') fn(...args);
+  if (typeof fn === 'function') return fn(...args);
 }
 
 function span(cls, text) {
@@ -651,7 +755,7 @@ async function attach(files) {
       continue;
     }
     try {
-      pending.push({ name: f.name || 'clipboard.png', mime: f.type, size: f.size, b64: await b64of(f) });
+      cur.pending.push({ name: f.name || 'clipboard.png', mime: f.type, size: f.size, b64: await b64of(f) });
     } catch (e) {
       notice('err', 'could not read ' + (f.name || 'that file') + ': ' + e);
     }
@@ -683,11 +787,11 @@ function dataURL(a) { return 'data:' + (a.mime || 'image/png') + ';base64,' + a.
 // than appends, and allowed to: the tray holds a handful of items, it is not
 // in the feed, and it changes only when a person adds or removes one.
 function drawTray() {
-  tray.hidden = pending.length === 0;
+  tray.hidden = cur.pending.length === 0;
   if (tray.hidden) { tray.replaceChildren(); return; }
 
   const frag = document.createDocumentFragment();
-  pending.forEach((a, i) => {
+  cur.pending.forEach((a, i) => {
     const chip = document.createElement('div');
     chip.className = 'chip';
 
@@ -703,7 +807,7 @@ function drawTray() {
     x.type = 'button';
     x.textContent = '×';
     x.title = 'remove ' + a.name;
-    x.addEventListener('click', () => { pending.splice(i, 1); drawTray(); input.focus(); });
+    x.addEventListener('click', () => { cur.pending.splice(i, 1); drawTray(); input.focus(); });
     chip.appendChild(x);
 
     frag.appendChild(chip);
@@ -801,8 +905,8 @@ async function askClipboard() {
   try {
     const img = await window.goClipboard();
     if (!img || !img.b64) return;
-    if (pending.some(a => a.b64 === img.b64)) return;
-    pending.push({ name: img.name, mime: img.mime || 'image/png', size: img.size, b64: img.b64 });
+    if (cur.pending.some(a => a.b64 === img.b64)) return;
+    cur.pending.push({ name: img.name, mime: img.mime || 'image/png', size: img.size, b64: img.b64 });
     drawTray();
   } catch { /* nothing on the clipboard that is a picture */ }
 }
@@ -838,23 +942,21 @@ function send() {
   const text = input.value.trim();
   // A message that is nothing but a picture is a message: drop a screenshot in,
   // press enter.
-  if (!text && !pending.length) return;
-  const shots = pending;
-  pending = [];
+  if (!text && !cur.pending.length) return;
+  const shots = cur.pending;
+  cur.pending = [];
   drawTray();
   input.value = '';
   input.style.height = 'auto';
 
-  // Echoed locally rather than waited for: the worker replays user messages
-  // only when a conversation is reopened, and a message that took a round trip
-  // to appear would read as lag.
-  if (!BUSY.has(status.State)) {
-    closeCalls();
-    callCount = 0;
-    callFail = 0;
-    runStart = performance.now();
+  if (!BUSY.has(cur.status.State)) {
+    cur.callCount = 0;
+    cur.callFail = 0;
+    cur.runStart = performance.now();
   }
-  push('user', { text, shots });
+  // Echoed locally, not waited for (a round-trip echo would read as lag), and
+  // through the same entry point as everything else, so the feed has one way in.
+  window.__cua.push({ events: [{ state: 'user', token: text, images: shots }], status: cur.status, loading: false });
   settleProse();
   scrollToBottom();
   // goSend when there is nothing attached, so the common message crosses the
@@ -865,23 +967,19 @@ function send() {
 
 function toggleThink() {
   showThink = !showThink;
-  for (const b of blocks) if (b.kind === 'think') b.el.classList.toggle('folded', !showThink);
+  for (const b of cur.blocks) if (b.kind === 'think') b.el.classList.toggle('folded', !showThink);
 }
 
 function toggleCalls() {
   foldCalls = !foldCalls;
-  for (const b of blocks) if (b.kind === 'calls') b.el.classList.toggle('folded', foldCalls);
+  for (const b of cur.blocks) if (b.kind === 'calls') b.el.classList.toggle('folded', foldCalls);
 }
 
 // --------------------------------------------------------------- scrolling
 
-feed.addEventListener('scroll', () => {
-  pinned = feed.scrollTop + feed.clientHeight >= feed.scrollHeight - 28;
-}, { passive: true });
-
 function scrollToBottom() {
-  feed.scrollTop = feed.scrollHeight;
-  pinned = true;
+  cur.feed.scrollTop = cur.feed.scrollHeight;
+  cur.pinned = true;
 }
 
 // ------------------------------------------------------ decoding tool calls
@@ -1176,8 +1274,11 @@ function clip(s, n) {
 
 // --------------------------------------------------------------------- boot
 
+// The first session exists before any worker event, so the input has a home and
+// the held-back startup line has a feed to land in.
+sessionFor('default');
+switchTo('default');
 reset();
-drawStatus();
 input.focus();
 
 // Said last: everything above has to exist before the worker's held-back
@@ -1195,11 +1296,20 @@ go('goReady');
 // itself. A terminal frontend can be diffed against its own output; this one can
 // only be seen, so it has to be servable somewhere something can see it.
 //
-// ?demo&fast collapses every wait and applies each batch on the spot, so the
-// conversation is complete before the load event and a screenshot of the page is
-// the same picture every time.
+// ?demo=name picks a scenario from window.__FIXTURES (default, long, resumed,
+// cancelled). ?demo=folded runs the default with thinking unfolded and calls
+// folded. ?demo&fast collapses every wait and applies each batch on the spot, so
+// the conversation is complete before the load event and a screenshot of the page
+// is the same picture every time. ?demo&stop halts at the first batch marked
+// stop, leaving a batch of calls open - the one live state a finished replay
+// cannot show.
+function demoName() {
+  let name = new URLSearchParams(location.search).get('demo') || 'default';
+  return name === 'folded' ? 'default' : name;
+}
+
 function demoBatches() {
-  const script = window.__FIXTURE;
+  const script = (window.__FIXTURES && window.__FIXTURES[demoName()]) || window.__FIXTURE;
   if (!script) return [];
   const out = [];
   for (const b of script.batches) {
@@ -1207,32 +1317,38 @@ function demoBatches() {
     // does its real work, and a fixture handing over finished messages would
     // exercise none of it.
     const events = [];
-    for (const ev of b.events) {
+    for (const ev of (b.events || [])) {
       if (ev.state !== 'thinking' && ev.state !== 'content') { events.push(ev); continue; }
       for (const chunk of chunks(ev.token, 24)) events.push({ state: ev.state, token: chunk });
     }
-    out.push({ delay: b.delay || 0, status: b.status || {}, events });
+    out.push({ delay: b.delay || 0, status: b.status || {}, events, stop: !!b.stop, loading: !!b.loading, session: b.session, switch: b.switch });
   }
   return out;
 }
 
 function demoFast() {
+  const stop = location.search.includes('stop');
   for (const b of demoBatches()) {
-    window.__cua.push({ events: b.events, status: b.status, loading: false });
+    window.__cua.push({ events: b.events, status: b.status, loading: b.loading, session: b.session });
     flushNow();
+    if (b.switch) switchTo(b.switch);
+    if (stop && b.stop) { document.body.dataset.demo = 'stopped'; return; }
   }
   document.body.dataset.demo = 'done';
 }
 
 async function demoTimed() {
+  const stop = location.search.includes('stop');
   for (const b of demoBatches()) {
     await new Promise(r => setTimeout(r, b.delay));
     for (const ev of b.events) {
-      window.__cua.push({ events: [ev], status: b.status, loading: false });
+      window.__cua.push({ events: [ev], status: b.status, loading: b.loading, session: b.session });
       if (ev.state === 'thinking' || ev.state === 'content') {
         await new Promise(r => setTimeout(r, 18));
       }
     }
+    if (b.switch) switchTo(b.switch);
+    if (stop && b.stop) { document.body.dataset.demo = 'stopped'; return; }
   }
   document.body.dataset.demo = 'done';
 }
@@ -1249,7 +1365,7 @@ function chunks(text, n) {
 // of chips - painted here rather than pasted in as base64, which would put a
 // picture of a picture in the source.
 function demoTray() {
-  pending = [
+  cur.pending = [
     { name: 'failing-tests.png', mime: 'image/png', size: 184320, b64: swatch('#7fa8f0', '#a98fc4') },
     { name: 'screenshot 2026-08-23 at 14.02.11.png', mime: 'image/png', size: 962560, b64: swatch('#d9a15c', '#e8615f') },
   ];
@@ -1269,7 +1385,9 @@ function swatch(a, b) {
 }
 
 if (location.search.includes('demo')) {
-  demoTray();
+  const name = new URLSearchParams(location.search).get('demo') || 'default';
+  if (name === 'folded') { showThink = true; foldCalls = true; }
+  if (name === 'default') demoTray();
   if (location.search.includes('fast')) demoFast();
   else demoTimed();
 }
