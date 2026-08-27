@@ -22,8 +22,6 @@ import (
 
 	"cuacode/core/attach"
 	"cuacode/core/protocol"
-	"cuacode/core/runner"
-	"cuacode/core/session"
 
 	webview "github.com/webview/webview_go"
 )
@@ -78,31 +76,22 @@ func main() {
 	w.SetTitle(appName)
 	w.SetSize(1000, 720, webview.HintNone)
 
-	p := &pump{w: w}
-
-	// TerminalInfo rather than nil: the worker starts shell commands in the
-	// directory the frontend was launched from, and a GUI has one of those even
-	// though it has no terminal.
-	sess, err := runner.StartWith(p.emit, session.Options{
-		TerminalInfo: func() protocol.TerminalData {
-			return protocol.TerminalData{Program: appName, CWD: session.WorkingDir()}
-		},
-	})
-	if err != nil {
+	ws := newWorkspace(w)
+	if _, err := ws.newSession(); err != nil {
 		die(err)
 	}
-	defer sess.Close()
+	defer ws.closeAll()
 
-	bind(w, sess, p)
+	bind(w, ws)
 
 	// Asked for before the window opens, so the picker is already up - or the
 	// conversation already replaying - by the time the first frame is drawn.
 	switch {
 	case resume && resumeID != "":
-		p.loading = true
-		sess.Command("session.load", map[string]any{"id": resumeID})
+		ws.activeSess().pump.loading = true
+		ws.activeSess().sess.Command("session.load", map[string]any{"id": resumeID})
 	case resume:
-		sess.Command("session.list", nil)
+		ws.activeSess().sess.Command("session.list", nil)
 	}
 
 	w.Navigate(url)
@@ -112,15 +101,16 @@ func main() {
 // bind exposes the session to the page. Every one of these runs on the UI
 // thread: they are all a JSON write to the worker's stdin, which is a buffered
 // pipe, so they are kept synchronous - a goroutine per call would buy nothing
-// and would let two messages sent in quick succession swap order.
-func bind(w webview.WebView, sess *session.Session, p *pump) {
-	must(w.Bind("goSend", func(text string) { sess.SendChat(text) }))
+// and would let two messages sent in quick succession swap order. The session
+// bindings route to the active session; the workspace bindings manage the set.
+func bind(w webview.WebView, ws *workspace) {
+	must(w.Bind("goSend", func(text string) { ws.activeSess().sess.SendChat(text) }))
 	// The same message with pictures dropped or pasted onto it. A second
 	// binding rather than a second argument on the first: the page calls
 	// whichever it needs, and one served on its own with no bindings at all
 	// still runs either way.
 	must(w.Bind("goSendWith", func(text string, images []protocol.Image) {
-		sess.SendChatWith(text, images)
+		ws.activeSess().sess.SendChatWith(text, images)
 	}))
 	// The clipboard, read by the OS rather than by the page.
 	//
@@ -136,10 +126,10 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 	// user is waiting for the result of anyway.
 	must(w.Bind("goClipboard", func() (attach.Image, error) { return attach.Clipboard() }))
 
-	must(w.Bind("goCancel", func() { sess.Cancel() }))
-	must(w.Bind("goBackground", func() { sess.Background() }))
-	must(w.Bind("goCommand", func(action string, fields map[string]any) { sess.Command(action, fields) }))
-	must(w.Bind("goReply", func(id, typ string, fields map[string]any) { sess.Reply(id, typ, fields) }))
+	must(w.Bind("goCancel", func() { ws.activeSess().sess.Cancel() }))
+	must(w.Bind("goBackground", func() { ws.activeSess().sess.Background() }))
+	must(w.Bind("goCommand", func(action string, fields map[string]any) { ws.activeSess().sess.Command(action, fields) }))
+	must(w.Bind("goReply", func(id, typ string, fields map[string]any) { ws.activeSess().sess.Reply(id, typ, fields) }))
 
 	// The window's own name, set from the page. The webview does not follow
 	// document.title on any of the three hosts, and the title is the only part
@@ -155,7 +145,19 @@ func bind(w webview.WebView, sess *session.Session, p *pump) {
 	// The page says when it can receive. Worker events that land before the
 	// first paint are held rather than evaluated into a document that does not
 	// exist yet - the worker's startup line always beats the page.
-	must(w.Bind("goReady", p.setReady))
+	must(w.Bind("goReady", ws.setReady))
+
+	// The workspace: start a fresh worker, switch which one is active, or close
+	// one. goNewSession and goClose return the id the page should show next.
+	must(w.Bind("goNewSession", func() string {
+		id, err := ws.newSession()
+		if err != nil {
+			return ""
+		}
+		return id
+	}))
+	must(w.Bind("goSwitch", func(id string) { ws.switchTo(id) }))
+	must(w.Bind("goClose", func(id string) string { return ws.close(id) }))
 }
 
 // resumeFlag reads the resume flag off the command line. A bare --resume means

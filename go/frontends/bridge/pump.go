@@ -48,14 +48,18 @@ type wireEvent struct {
 // last one, plus the state after all of it. The status goes once per batch
 // rather than once per event - the bar can only show the latest reading, and
 // forty intermediate copies of it are forty copies the page has to skip.
+// Session names which feed the batch belongs to; a workspace has several, and
+// the page routes each batch to its own feed.
 type batch struct {
+	Session string           `json:"session,omitempty"`
 	Events  []wireEvent      `json:"events"`
 	Status  session.Snapshot `json:"status"`
 	Loading bool             `json:"loading"`
 }
 
 type pump struct {
-	w view
+	w       view
+	session string // the session this pump belongs to, for the batch
 
 	mu      sync.Mutex
 	events  []wireEvent
@@ -130,7 +134,7 @@ func (p *pump) flush() {
 		p.mu.Unlock()
 		return
 	}
-	b := batch{Events: p.events, Status: p.snap, Loading: p.loading}
+	b := batch{Session: p.session, Events: p.events, Status: p.snap, Loading: p.loading}
 	p.events, p.pending, p.loading = nil, false, false
 	p.mu.Unlock()
 
