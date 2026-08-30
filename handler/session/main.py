@@ -214,7 +214,7 @@ class Session:
         """Read fresh, never persisted, and never part of messages(): ollama
         wants it as a first message but anthropic and gemini take it as a
         request parameter, so placement is the provider's call."""
-        return store.system_prompt("v1")
+        return store.system_prompt()
 
     def records(self) -> list[dict]:
         """The canonical records, committed ones first. Frontends rebuilding a

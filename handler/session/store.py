@@ -19,7 +19,7 @@ def sessions_root() -> Path:
 # Read fresh on every load, never persisted into a session: editing the
 # prompt has to reach old conversations too.
 # v0 used to exist but i lowkey nuked it, you can rename v1 -> v0 and v2 -> v1 but I haven't been able to quit having v1 yet LOL
-def system_prompt(version: Literal["v1", "v2"] = "v1") -> str: return (_REPO / f"system_prompt.{version}.txt").read_text()
+def system_prompt() -> str: return (_REPO / f"system_prompt.txt").read_text()
 
 def tools_dir() -> Path: return _REPO / "tools"
 
