@@ -7,10 +7,8 @@ def move(x: int, y: int):
 def cursor() -> tuple[int, int]:
     """Where the pointer actually is, in the same logical points move() takes.
 
-    Worth reading back: CGEventPost does not fail when the process is missing
-    Accessibility permission, it is simply dropped. A no-op looks exactly like
-    a click in the wrong place from the agent's side, and it will keep
-    re-aiming at a target it was never able to reach.
+    The same read-back the click tool relies on, and read the same way -- after
+    a wait, since the post is asynchronous. See tools/_pointer.py.
     """
     loc = _Q.CGEventGetLocation(_Q.CGEventCreate(None))
     return round(loc.x), round(loc.y)

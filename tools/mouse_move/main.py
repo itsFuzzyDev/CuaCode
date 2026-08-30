@@ -2,6 +2,8 @@ import sys, platform
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from tools._pointer import verify
+
 OS = platform.system()
 
 def _platform_module():
@@ -16,12 +18,6 @@ def run(args: dict, ctx) -> dict:
     plat.move(x, y)
     out = {"moved_to": [x, y]}
     # Same read-back the click tool does: a move that was silently dropped
-    # reports success otherwise. See tools/click/main.py.
-    landed = getattr(plat, "cursor", lambda: None)()
-    if landed and (abs(landed[0] - x) > 1 or abs(landed[1] - y) > 1):
-        out["landed_at"] = list(landed)
-        out["warning"] = ("the pointer is not where it was sent; the event was probably dropped, "
-                          "which on macOS means this app lacks Accessibility permission "
-                          "(System Settings > Privacy & Security > Accessibility). Tell the user "
-                          "rather than retrying the move")
+    # reports success otherwise. See tools/_pointer.py.
+    out.update(verify(plat, x, y))
     return out

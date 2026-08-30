@@ -2,6 +2,8 @@ import sys, platform
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from tools._pointer import verify
+
 OS = platform.system()
 
 def _platform_module():
@@ -21,11 +23,5 @@ def run(args: dict, ctx) -> dict:
     # went nowhere -- dropped for want of Accessibility permission, or aimed
     # off-screen and clamped -- otherwise reports success, and the agent spends
     # the next several rounds re-aiming at a target it can never hit.
-    landed = getattr(plat, "cursor", lambda: None)()
-    if landed and (abs(landed[0] - x) > 1 or abs(landed[1] - y) > 1):
-        out["landed_at"] = list(landed)
-        out["warning"] = ("the pointer is not where the click was aimed; the event was probably "
-                          "dropped, which on macOS means this app lacks Accessibility permission "
-                          "(System Settings > Privacy & Security > Accessibility). Tell the user "
-                          "rather than retrying the click")
+    out.update(verify(plat, x, y))
     return out
