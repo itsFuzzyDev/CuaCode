@@ -4,6 +4,7 @@ output:
   results: list
 active: True
 require_permissions: True
+backgroundable: True
 ---
 Search the web for a query and return a list of ranked results, each with a
 title, url, and snippet.
