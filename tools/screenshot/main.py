@@ -34,20 +34,10 @@ def run(args: dict, ctx) -> dict:
     session_dir = getattr(ctx, "session_dir", None) if ctx else None
     self_name = getattr(ctx, "self_identity", None)
 
-    # Park our own terminal in the left strip so it never covers the app being
-    # driven -- but without raising it. This runs on every capture, and it is
-    # the last window action before the shot, so raising here would leave the
-    # terminal focused and send the agent's next click/keystroke to itself.
-    #
-    # It runs on every capture on purpose: nothing else re-checks. The agent
-    # will not think to call app_open again when a window has drifted back over
-    # the terminal, so the guarantee has to be re-established here or not at
-    # all. What it costs is a single geometry read in the case that matters --
-    # the window is still parked -- and only the drifted case pays for a move.
-    #
-    # Parking is cosmetic; the capture is the tool. A window-manager call that
-    # fails must not cost the agent its only view of the screen, so nothing
-    # here is allowed to propagate.
+    # Park our terminal in the left strip, without raising it, on every capture:
+    # nothing else re-checks parking, and raising here would leave the terminal
+    # focused and eat the agent's next click. A window-manager failure never
+    # propagates -- losing the shot is worse than a bad parking job.
     self_snapped = False
     if self_name:
         try:
@@ -55,13 +45,9 @@ def run(args: dict, ctx) -> dict:
         except Exception:
             self_snapped = False
 
-    # The other half of the same guarantee, and the reason an app the agent
-    # started from the shell ends up parked at all: a process appears in the
-    # app list well before it has a window, so the launch that reported nothing
-    # new is caught here, on the call the agent makes right after opening
-    # something. Apps already parked are re-checked in the same pass -- they
-    # drift, restore saved frames, and resize themselves once a page loads --
-    # and a window still where it was put costs one geometry read.
+    # Same guarantee for apps the agent just opened: a process shows up in the
+    # app list before it has a window, so parking is redone here on the next
+    # call, and already-parked windows drift back into place.
     opened = []
     try:
         opened = _window.park_new(self_name, focus=False)
@@ -77,12 +63,9 @@ def run(args: dict, ctx) -> dict:
     # another thread at the same time.
     raw_copy = img.copy()
 
-    # Down to logical points before anything is drawn or reported. The grid the
-    # agent reads coordinates off has to be in the unit the click tools take,
-    # and on a retina display the capture is not: it comes back in framebuffer
-    # pixels, twice the points CGEvent moves the cursor in. The resize is not
-    # guarded on scale > 1: a ratio under 1 means the two readings disagree
-    # about which screen was captured, which is a bug, not a no-op.
+    # Down to logical points: the capture is framebuffer pixels, the click tools
+    # take CGEvent points. A scale under 1 would mean the two readings disagree
+    # about which screen this is -- a bug, not a no-op, so it is not shrunk.
     scale, logical_w, logical_h = plat.detect_scale(*img.size)
     if scale != 1.0:
         from PIL import Image
@@ -100,12 +83,9 @@ def run(args: dict, ctx) -> dict:
         cw, ch = max(1, min(lw, round(lw / zoom))), max(1, min(lh, round(lh / zoom)))
         x0 = max(0, min(cx - cw // 2, lw - cw))
         y0 = max(0, min(cy - ch // 2, lh - ch))
-        # Enlarged by exactly `zoom`, rather than back up to the full screen
-        # size. The crop is a rounded number of points, so stretching it to a
-        # fixed output would make the real magnification a hair off the number
-        # the grid is labelled with, and the labels drift a pixel or two from
-        # what they point at by the far edge -- worst at high zoom, which is
-        # the case the zoom exists for.
+        # Enlarged by exactly `zoom`, not back to a fixed output size: the crop
+        # is rounded points, and a stretch would drift the grid labels from what
+        # they point at by the far edge.
         img = img.crop((x0, y0, x0 + cw, y0 + ch)).resize(
             (round(cw * zoom), round(ch * zoom)), Image.LANCZOS)
         origin = (x0, y0)
@@ -114,18 +94,9 @@ def run(args: dict, ctx) -> dict:
 
     img = draw_grid(img, grid_size, plat.FONT_PATH, origin=origin, scale=zoom)
 
-    # PNG, and named as such. The bytes were always PNG -- the .jpg temp file
-    # and the quality= that PNG ignores were both decoration -- but the label
-    # is what the providers key their media type off. Lossy encoding is the
-    # wrong trade here anyway: the grid is thin red lines and small text over
-    # UI, which is exactly what a JPEG smears.
-    #
-    # compress_level=6 rather than optimize=True: optimize re-runs the encoder
-    # over several filter strategies and keeps the smallest, which on a screen
-    # full of flat UI costs 131ms to save 9KB out of 338. The bytes are
-    # identical either way -- PNG is lossless at every level -- so the only
-    # thing being traded is a rounding error of upload against a fifth of a
-    # second of the agent sitting still.
+    # PNG, labelled PNG -- the grid is thin red lines and small text, exactly
+    # what JPEG smears. compress_level=6 over optimize=True: identical bytes,
+    # 131ms cheaper per shot.
     buf = io.BytesIO()
     img.convert("RGB").save(buf, "PNG", compress_level=6)
     b64 = base64.b64encode(buf.getvalue()).decode()

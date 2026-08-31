@@ -27,12 +27,9 @@ Ctx = type('Ctx', (dict,), {'self_identity': property(lambda s: s.get("frontmost
                             'cwd': property(lambda s: s.get("cwd"))})
 ctx = Ctx(ipc.terminal_info)
 
-# A session exists from boot but nothing touches disk until a round commits,
-# so launching the app and closing it leaves no empty session dirs behind. The
-# effort comes off the config rather than starting blank: the level is a
-# property of the conversation, but "which level a new conversation starts on"
-# is a property of the account, and without it every restart silently went back
-# to whatever the provider thinks is enough thinking.
+# A session exists from boot; nothing touches disk until a round commits, so a
+# launch-and-close leaves no empty dirs. Effort starts at the account default:
+# without it, every restart fell back to the provider's idea of enough thinking.
 sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
                       effort_level=config.default_effort())
 messages = sess.messages()
@@ -79,14 +76,11 @@ def context_fields(usage: dict) -> dict:
     return out
 
 def ask_permission(name: str, args: dict, preview: dict = None) -> bool:
-    # timeout=None and stop are not in tension: the question stays open for as
-    # long as the user needs, but a cancel arriving while it is up ends the run
-    # it belonged to instead of leaving it waiting on an answer nobody is going
-    # to give. Abandoned reads as refused, and the loop's own cancel check on
-    # the next line is what actually stops the turn.
-    # preview is what the tool says the call would do -- a diff, a line of prose --
-    # and is absent for most of them. Sent as its own field rather than folded into
-    # args, so a frontend that has never heard of it draws what it always drew.
+    # timeout=None keeps the question open as long as the user needs; a cancel
+    # still ends the run it belonged to (abandoned reads as refused), and the
+    # loop's own cancel check is what actually stops the turn.
+    # preview is what the call would do -- a diff, a line of prose -- sent as its
+    # own field, so a frontend that never heard of it draws what it always drew.
     payload = {"name": name, "args": args}
     if preview: payload["preview"] = preview
     reply = ipc.call("permission", payload, timeout=None, stop=ipc.cancelled)
@@ -218,12 +212,9 @@ def announce_title(env=None):
 pending_note = ""
 
 while True:
-    # The frontend that spawned us is gone: its pipe closed (EOF) or we were
-    # reparented to launchd (getppid()==1). Either way there is nobody left to
-    # talk to, so exit rather than poll an empty inbox forever -- otherwise
-    # every crash or force-quit leaves an orphan worker behind. Mirrors the
-    # `stop` path below: background work is asked to stop first, then the
-    # session is committed and we leave.
+    # The frontend is gone: pipe EOF or reparented to launchd, so exit rather
+    # than poll an empty inbox forever. Mirrors `stop`: background work asked to
+    # stop first, then the session is committed.
     if ipc.eof() or os.getppid() == 1:
         JOBS.kill_all()
         sess.commit()
@@ -283,12 +274,9 @@ while True:
             ASK_PERMISSION = env.data.get("mode") == "ask"
             ipc.reply(env, "status", {"state": "permission", "mode": "ask" if ASK_PERMISSION else "auto"})
         elif action == "tool.detail":
-            # The other half of the summarising above: the wire carries a size
-            # where a result was, and this is how a frontend gets the thing
-            # itself -- asked for, one call at a time, never streamed at
-            # everyone by default. Normally answered on the reader thread by
-            # _detail_now and never seen here; this is what catches one that
-            # arrived before that was registered.
+            # The result itself, one call at a time and never streamed by
+            # default -- the wire carried only its size. Normally answered on
+            # the reader thread; this catches one that arrived before that.
             try: want = int(env.data.get("index", -1))
             except (TypeError, ValueError): want = -1
             ipc.reply(env, "detail", tool_detail(sess, want))
@@ -468,13 +456,8 @@ while True:
             except ValueError as e:
                 ipc.reply(env, "status", {"state": "error", "error": str(e)})
         elif action == "chat":
-            # Re-read per turn rather than trusting what boot saw. The config
-            # is a file the user edits, and until now only two IPC actions
-            # refreshed this -- so a model changed by hand left the worker
-            # running on the old answer for the rest of its life, most visibly
-            # by withholding the cameras from a model that could see perfectly
-            # well. Reading a small json file per turn is nothing next to the
-            # request that follows it.
+            # Config is re-read every turn: the user edits it, and a model
+            # changed by hand must not survive until restart.
             before = (SETTINGS.get("vision", True), SETTINGS.get("model", ""))
             SETTINGS = config.settings()
             now = (SETTINGS.get("vision", True), SETTINGS.get("model", ""))
@@ -543,12 +526,9 @@ while True:
                                      apps=[ctx.get("frontmost_app") or ""])
             except Exception:
                 notes = []
-            # The same treatment for documentation sitting in the working
-            # directory: names and sizes, never bodies, and at most twice in a
-            # conversation. Separate from recall because the two answer different
-            # questions -- what do I already know about this, versus what does
-            # this repository say about itself -- and a frontend showing them as
-            # one notice would make the second look like a memory hit.
+            # Project documentation: names and sizes only, at most twice in a
+            # conversation, because it answers a different question than recall
+            # -- what does this repo say of itself, not what do I already know.
             try:
                 docs = instructions.docs_block(text, sid=sess.id, path=ctx.get("cwd") or "",
                                                first=opening)
@@ -574,13 +554,9 @@ while True:
                 ipc.reply(env, "token", {"state": "notice", "token": extra, "status": "running"})
             pending_note = ""
             ipc.reply(env, "status", {"type": "chat_received"})
-            # Point ctx at whichever session this turn belongs to. Here rather
-            # than beside each `sess =` above, because there are three of those
-            # and a tool only ever reads this from inside the run below -- so
-            # the one place it has to be right is the moment before the run.
-            # The directory is a path, not a mkdir: nothing creates it until a
-            # tool actually puts something in it, and an idle launch still
-            # leaves no session behind.
+            # ctx gets this turn's session here: there are three `sess =` sites
+            # and a tool only reads it inside the run. A path, not a mkdir --
+            # an idle launch still leaves no session behind.
             ctx["session_dir"] = str(sess.dir)
             # How hard this conversation is thinking, for anything that starts
             # a model of its own from inside a tool call. A subagent that did
@@ -600,45 +576,18 @@ while True:
                 # rather than kept as one stale dict.
                 for chunk in generate(API_KEY=config.api_key(SETTINGS["provider"]), messages=messages,
                                       ctx=ctx, settings={**SETTINGS, "effort": sess.effort},
-                                      # Two segments, not one string: the instructions
-                                      # are the same on every machine and the second
-                                      # block is what is true about this one. Kept
-                                      # apart so each provider puts them where they
-                                      # belong -- separate system messages on ollama
-                                      # and openai, separate system blocks on
-                                      # anthropic. Machine facts are assembled per
-                                      # turn rather than stored on the session: the
-                                      # prompt has to describe the machine this turn
-                                      # runs on, not the one the conversation started
-                                      # on.
-                                      # Three segments now: the instructions that
-                                      # ship with the agent, the user's own
-                                      # standing orders from ~/.cuacode/AGENTS.md,
-                                      # and what is true about this machine. The
-                                      # user's block sits between them because it
-                                      # is stable -- a provider caches the prompt
-                                      # as a prefix, and the environment block
-                                      # carries the clock, so anything placed
-                                      # after it is re-sent every turn anyway.
-                                      # Empty segments are dropped: a blank system
-                                      # block is a 400 on more than one provider.
-                                      # Four now: the always-on skills sit with the
-                                      # user's standing orders because that is what
-                                      # they are -- rules in force before the first
-                                      # decision of the turn, not something to go
-                                      # and fetch -- and they are as stable as the
-                                      # block above them, so the cached prefix
-                                      # still runs to the environment block.
+                                      # One segment each: shipped instructions,
+                                      # standing orders, always-on skills (stable,
+                                      # so the cached prefix survives), then this
+                                      # turn's machine facts. Blanks dropped: an
+                                      # empty system block errors on some providers.
                                       system=[s for s in (sess.system, instructions.user_block(),
                                                           skills.always_block(),
                                                           environment.block(ctx, SETTINGS, sess)) if s],
                                       cancelled=ipc.cancelled,
-                                      # Whatever was typed while this run was
-                                      # going. A callable, not a list: the loop
-                                      # asks at the one point in a round where a
-                                      # user message is legal, and anything that
-                                      # arrives after the last of those is put
-                                      # back on the inbox by end_run and becomes
+                                      # steer is a callable, not a list: generate()
+                                      # asks at the one point a user message is
+                                      # legal, and end_run puts the rest back as
                                       # an ordinary next turn.
                                       steer=ipc.take_steer,
                                       # The event itself, not a reading of it:
@@ -658,14 +607,10 @@ while True:
                         sess.add_assistant(chunk.get("thinking", ""), chunk.get("content", ""),
                                            chunk.get("tool_calls") or [], usage=round_cost)
                     elif typ == "cancelled":
-                        # No rewind. The loop closed the round off rather than
-                        # abandoning it -- every tool_call it left behind has a
-                        # result saying it was interrupted -- so what is in
-                        # messages is resumable, and the records that describe it
-                        # were yielded on the way here like any other round's.
-                        # Deleting them was what used to leave the model with no
-                        # idea it had been stopped, and no sight of the half-
-                        # finished work the user pressed the key to correct.
+                        # No rewind: the loop closed the round off (every
+                        # tool_call has an interrupted result), so `messages`
+                        # is resumable -- deleting them was what erased the stop
+                        # from the model's view.
                         messages = chunk.get("messages", messages)
                         sess.commit()
                         # Told to the model on its next turn rather than now: the
@@ -674,13 +619,10 @@ while True:
                         pending_note = chunk.get("note", "")
                         ipc.reply(env, "token", {"state": "cancelled", "token": "cancelled", "status": "cancelled", "msg_count": len(messages)})
                     elif typ == "failed":
-                        # A dropped connection, not a cancel, and handled the
-                        # same way for the same reason: the loop closed the
-                        # round off instead of abandoning it, so what streamed
-                        # before the link went is still on screen and still in
-                        # the history. `kept` is what says so -- the state is
-                        # "error" because the turn did end badly, and a frontend
-                        # that predates this field draws it as one.
+                        # A dropped connection, handled like a cancel: the round
+                        # was closed off, so what streamed is kept. State is
+                        # "error" because the turn did end badly; `kept` is what
+                        # newer frontends read.
                         messages = chunk.get("messages", messages)
                         sess.commit()
                         pending_note = chunk.get("note", "")
@@ -759,12 +701,9 @@ while True:
                             count = result.get("count", 1)
                             ipc.reply(env, "token", {"state": "tool_output", "token": name, "result": {"n": count}, "index": idx, "status": "tooling"})
                         elif name in ("WebFetch", "agent", "workflow", "skill", "describe_image") and isinstance(result.get("result"), dict):
-                            # Same reason as images and shell output: a page in
-                            # full mode is tens of thousands of characters, and
-                            # a frontend drawing one row should never have to
-                            # read a web page to do it. What it needs is the
-                            # size and where it came from; the content itself
-                            # is already in the messages.
+                            # A page's body stays out of the drawn row: tens of
+                            # thousands of characters per row, and the content is
+                            # already in the messages if anything wants it.
                             r = result["result"]
                             body = r.get("output")
                             brief = {k: v for k, v in r.items() if k not in ("output", "log", "text", "instructions", "description")}

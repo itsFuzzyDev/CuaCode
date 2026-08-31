@@ -38,12 +38,10 @@ class Tool:
     # it -- file draws the diff an edit would produce -- and the loop shows the
     # arguments alone for every tool that does not.
     preview: Callable = None
-    # Whether *these particular arguments* are harmless, asked of a tool that
-    # requires permission before the user is. require_permissions is a property
-    # of the tool and most tools that have it are only sometimes dangerous:
-    # `file` reads as often as it writes, and most shell commands only look.
-    # A tool that defines safe() gets to say which calls are which, and one
-    # that does not keeps being asked about every time.
+    # Per-call danger, asked of the tool itself: require_permissions is
+    # tool-wide, but most tools are only sometimes dangerous (a file read, a
+    # harmless command). A tool with safe() says which; one without is asked
+    # every time.
     safe: Callable = None
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
@@ -109,12 +107,9 @@ def refresh_dynamic(registry: dict[str, Tool]) -> dict[str, Tool]:
 def dispatch(registry: dict[str, Tool], name: str, args: dict, ctx=None) -> dict:
     tool = registry.get(name)
     if not tool: return {"error": f"unknown tool: {name}"}
-    # Checked against the tool's own schema before the handler sees it, so a
-    # missing field comes back as a sentence the model can act on instead of a
-    # KeyError rendered as a tool result. Defaults are deliberately not filled:
-    # a handler's own `args.get(k, fallback)` is the authority on what absent
-    # means, and quietly substituting the schema's idea of it would override
-    # that from the outside.
+    # Schema-checked before the handler: a missing field becomes a sentence the
+    # model can act on instead of a KeyError as a result. Defaults stay unfilled
+    # -- the handler's own args.get() owns what absent means.
     args, errs = check(args or {}, tool.input_schema)
     if errs: return {"error": "; ".join(errs)}
     try: return {"result": tool.handler(args, ctx)}

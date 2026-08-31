@@ -100,12 +100,9 @@ def turn_fields(chunk: dict) -> dict:
     if (n := usage.get("reasoning")) is not None:
         think = n
     elif total and (think_chars or reply_chars):
-        # The provider billed one number for the whole reply and will not say
-        # how much of it was thinking, so the measured total is divided where
-        # the characters went. A split, not a guess bolted on: estimating each
-        # half separately produced 147 tokens of thinking inside a 141-token
-        # reply, which is the kind of arithmetic that makes a reader stop
-        # believing every other number on the page.
+        # The provider bills one number for the whole reply; the split follows
+        # where the characters went, because estimating each half separately
+        # produced 147 thinking tokens inside a 141-token reply.
         think = round(total * think_chars / (think_chars + reply_chars))
         out["thinking_est"] = True
     else:

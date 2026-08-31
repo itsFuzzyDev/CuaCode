@@ -143,13 +143,10 @@ RULES = [
     (None, "openai", r"^qwen3",    Spec("qwen", off={"extra_body": {"enable_thinking": False}})),
 ]
 
-# Deliberately absent: rows claiming a model has no knob at all. There were two
-# -- grok-4 and minimax -- and both were true of the model that shipped under
-# that name and false of the one answering now. A permanent "cannot" written
-# here costs every future version of that model its effort control, silently;
-# an optimistic attempt costs one rejected request, which learn() then records
-# for that exact model. Where the endpoint itself says a model cannot think,
-# spec_for hears it from the endpoint, which is a fact rather than a guess.
+# Deliberately absent from the table: "this model has no knob at all" rows.
+# Such a row costs a future version of the model its effort control; an
+# optimistic attempt costs one request, which learn() records for the model.
+# When an endpoint states a model cannot think, spec_for learns it as a fact.
 
 # Everything unmatched. Optimistic on purpose: the dialect's usual spelling is
 # tried once, and learn() demotes the model for good if the server says no.

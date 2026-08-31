@@ -67,14 +67,11 @@ class IPC:
                 # generate() for the whole run, so anything meant to reach a
                 # call already in flight has to be flagged from out here.
                 elif action == "background": self.background.set()
-                # A message typed while the turn is still going. Held out here
-                # for the same reason, and -- unlike cancel -- deliberately not
-                # queued: the main loop would read it after the run and answer
-                # it as a second turn, which is the behaviour this replaces. The
-                # loop drains it between tool calls instead and speaks it into
-                # the round that is already happening. Anything still unspoken
-                # when the run ends is put back on the inbox by end_run, so a
-                # message is delayed at worst and never dropped.
+                # A message typed mid-turn. Deliberately not queued for the main
+                # loop (it would answer it as a second turn): the loop drains it
+                # between calls and speaks it into the live round, and end_run
+                # requeues whatever is still unspoken -- delayed at worst, never
+                # dropped.
                 elif action == "chat" and self._running.is_set():
                     with self._steer_lock: self._steer.append(env)
                     # Shaped like chat_received and for the same purpose -- an

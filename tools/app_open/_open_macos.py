@@ -1,15 +1,9 @@
 import subprocess, time
 
-# A window that just appeared is not a window that has finished appearing: apps
-# animate windows open, show a splash first, and restore their saved frame a
-# beat after launch. Every constant here exists to outlive one of those.
-#
-# The gaps are short because the *reads* are cheap. Everything here used to go
-# through `osascript -e`, which is a process spawn plus an AppleEvent round trip
-# -- 180ms to ask a window where it is -- so the polling gaps were sized to keep
-# the call count down rather than to match anything happening on screen. Talking
-# to the Accessibility API directly costs about 1ms, so the gap can be what the
-# animation actually needs.
+# A window that just appeared has not finished appearing: apps animate, splash,
+# and restore saved frames late. Every constant below outlives one of those.
+# Reads are ~1ms through the Accessibility API; they were 180ms of osascript,
+# which is why the gaps used to be sized for call count instead of animation.
 _STABLE_SAMPLES = 2       # identical geometry readings before a window counts as settled
 _SAMPLE_GAP = 0.08        # seconds between those readings
 _MIN_WINDOW_PX = 100      # smaller than this is a splash/tooltip, not the app
@@ -430,26 +424,19 @@ def _screen_size() -> tuple[int, int]:
 
 
 def _landed(geo: tuple[int, int, int, int] | None, x0: int, y0: int) -> bool:
-    # Position only. An app with a minimum width cannot be squeezed into the
-    # slice, and that is fine -- being in the wrong half of the screen is not.
-    #
-    # y is checked against a range rather than a point: a request for y=0 is
-    # honoured by some apps and clamped to the bottom of the menu bar by the
-    # rest, and both are the top of the screen as far as this is concerned.
+    # Position only: an app that refuses to shrink is fine, being in the wrong
+    # half is not. y=0 is checked against a range -- some apps clamp it to the
+    # menu bar, and both are the top of the screen as far as this is concerned.
     if geo is None: return False
     if abs(geo[0] - x0) > _TOLERANCE: return False
     if y0 == 0: return -_TOLERANCE <= geo[1] <= _menu_bar() + _TOLERANCE
     return abs(geo[1] - y0) <= _TOLERANCE
 
 
-# What a (process, target slice) pair settled at the last time a snap verified
-# it. The screenshot tool snaps before every single capture -- so that the agent
-# never photographs its own terminal sitting on top of the app it is driving --
-# and the honest answer to "is it still parked?" is almost always yes. Comparing
-# against the exact geometry that was verified, rather than against the geometry
-# that was *asked* for, is what makes the check safe: an app clamped to a minimum
-# width settles at a size the request never mentioned, and re-deriving "correct"
-# from the request alone would call that drift and move it again forever.
+# What each (process, target slice) pair actually settled at, last verified.
+# Compared against verified geometry, not the request: an app clamped to a
+# minimum width never matches its requested size, and re-deriving "correct"
+# from the request would call that drift and move it forever.
 _SETTLED = {}
 
 

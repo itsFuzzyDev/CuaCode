@@ -90,13 +90,9 @@ def _opened(*a):
     try: return "ok", _open(*a)
     except BaseException as e: return "err", e
 
-# How many times a request that never arrived is sent again, and how long to
-# wait between tries. Doubling from a second gives 1, 2, 4, 8: long enough by
-# the last one that a wifi handover or a provider restart has actually
-# finished, short enough at the first that a blip costs a pause rather than a
-# turn. Four is where the two stop trading against each other -- a fifth try is
-# another sixteen seconds of a person watching a spinner to find out something
-# the fourth already suggested.
+# Retries for a request that never arrived: 1, 2, 4, 8 seconds -- long enough
+# for a wifi handover to finish. Four, because a fifth try is sixteen more
+# seconds of spinner to learn nothing new.
 RETRIES = 4
 RETRY_BASE = 1.0
 RETRY_CAP = 30.0
@@ -312,28 +308,15 @@ def _todo_note(ctx) -> str:
             "moved on, or clear it if it no longer describes what you are doing.\n"
             "</todo_status>")
 
-# What a cancel leaves behind, and how the model is told about it.
-#
-# The round used to be deleted -- every message from the start of it, thinking,
-# reply and all -- because an assistant turn whose tool_calls have no matching
-# results is rejected on the next request, and deleting was the cheap way to be
-# sure none were left dangling. The cost was that the model came back with no
-# idea it had ever been stopped, and no sight of the half-finished plan the user
-# interrupted it to correct: the very thing they were about to talk about.
-#
-# So the round is closed off instead of removed. Every call that never got a
-# result gets one saying why, which is what makes keeping it legal, and the note
-# below is folded into the user's next message -- never sent as one of its own,
-# because two user messages in a row is a 400 on anthropic.
+# A cancel closes the round off instead of deleting it: every unanswered call
+# gets a result saying why, which is what makes keeping it legal, and the note
+# rides on the user's next message -- two user messages in a row is a 400.
 _INTERRUPTED = "the user interrupted the turn before this call ran"
 _STOPPED = "the user interrupted the turn while this call was running"
 
-# Tagged like everything else the runtime puts in front of the model --
-# <recall>, <environment>, <user_instructions> -- rather than prefixed with a
-# bracket. The tag is the boundary: it says where the runtime stops talking and
-# the conversation starts again, which a label at the head of a paragraph cannot.
-# First line is a sentence for the human, because frontends draw a notice's
-# opening paragraph and drop the rest.
+# <tagged> like every runtime note (<recall>, <environment>, ...): the tag is
+# the boundary between runtime and conversation. The first line is the sentence
+# frontends draw.
 INTERRUPT_NOTE = ("stopped -- the partial turn above was kept\n\n"
                   "<interrupted>\n"
                   "The user stopped you here. Everything above is what you had produced when they\n"
@@ -342,13 +325,9 @@ INTERRUPT_NOTE = ("stopped -- the partial turn above was kept\n\n"
                   "and read what they say next as a correction to it.\n"
                   "</interrupted>")
 
-# What a dropped connection leaves behind. Shaped like INTERRUPT_NOTE and kept
-# for the same reason: the round is closed off rather than deleted, so half a
-# reply is still there to carry on from instead of costing the whole turn.
-#
-# The difference is who stopped it. Nobody chose this, so there is no correction
-# coming and nothing to wait for -- the model is told to continue, not to expect
-# a new instruction.
+# Shaped like INTERRUPT_NOTE, round closed off rather than deleted: half a
+# reply still carries on. Nobody chose this stop, so the model is told to
+# continue, not to expect an instruction.
 LOST_NOTE = ("connection lost -- the partial turn above was kept\n\n"
              "<connection_lost>\n"
              "The connection to the provider dropped part-way through this turn. Everything\n"
@@ -488,12 +467,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
     # tool because the tool only hears about the calls it receives, and the
     # interesting number is how many rounds went by without one.
     since_todo = 0
-    # Rounds lost to a connection that dropped before producing anything, which
-    # is the one failure that can be retried invisibly: nothing reached the
-    # screen, so asking again duplicates nothing. Counted across rounds rather
-    # than within one -- a link that is down is down for the whole turn, and a
-    # per-round counter would let a tool loop retry forever, four rounds at a
-    # time.
+    # Rounds lost to a connection that dropped before producing anything: the
+    # one failure that retries invisibly, and the one a per-round counter would
+    # retry forever.
     stream_retries = 0
 
     while True:
@@ -507,27 +483,19 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # already includes everything this one added, so keeping the old numbers
         # around would only ever mean reporting a stale round's.
         usage = {}
-        # From asking to the last chunk, tool calls excluded. That is the span a
-        # rate belongs to: a round that spent four minutes in a shell call did
-        # not generate slowly, and dividing by the whole round would say it did.
-        # The wait before the first token is inside it on purpose -- it is time
-        # the user spent watching a spinner, and a rate that hid it would flatter
-        # a reasoning model that thought for a minute and then typed fast.
+        # From asking to the last chunk, tool calls excluded -- a round that
+        # spent four minutes in a shell was not generating slowly, so the rate
+        # covers the model's time, not the tools'. The pre-token wait is inside
+        # it on purpose: that is time the user watched.
         began = time.monotonic()
         # Old screenshots out before the request is built, not after the reply.
         # This is the single biggest thing between a tool finishing and the next
         # token arriving: the whole transcript goes back up every round, and a
         # computer-use transcript is mostly base64. See handler/agent/images.py.
         images.evict(messages, keep=int(settings.get("keep_images", images.DEFAULT_KEEP)))
-        # Opening the request is itself a wait -- a reasoning model can sit on
-        # the connection for a minute before the first token, and that minute
-        # used to be unstoppable. Cancelling here abandons the socket to the
-        # daemon thread rather than waiting on a read nobody is reading.
-        #
-        # Tried again when it fails the way a network fails. A request that was
-        # never delivered costs nothing to send twice, and the alternative --
-        # what this used to do -- is that a two-second wifi handover throws away
-        # a turn the user then has to type again.
+        # Opening the request is itself a wait, and cancelling abandons the
+        # socket rather than waiting on a read nobody reads. A never-delivered
+        # request is retried: sending it twice costs nothing, a lost turn does.
         attempt, stream, first = 0, None, None
         while True:
             state, opened = interrupt.run(lambda: _opened(p, provider, model, messages, tools, system, params),
@@ -558,13 +526,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
                 del messages[mark:]
                 yield {"type": "cancelled", "messages": messages}
                 return
-        # The two halves of a reply, clocked apart. Thinking's clock starts when
-        # the request was opened -- the silence before the first thought is the
-        # model thinking about thinking, and charging it to the reply would
-        # flatter a model that stalls and then types fast -- and the reply's
-        # starts where the thinking stopped. Between them they account for the
-        # whole round, which is the point: "where did the ninety seconds go" is
-        # the question, and one number for the round cannot answer it.
+        # Thinking and reply are clocked apart -- thinking's clock starts at
+        # request-open, the silence before the first thought is real stall -- so
+        # together they answer where the round's seconds went.
         think_chars, reply_chars = 0, 0
         think_end, reply_end = 0.0, 0.0
         phase, tick = "", began + RATE_EVERY
@@ -628,15 +592,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
 
         if lost is not None:
             if thinking or content:
-                # Kept, exactly as an interrupted round is kept: half a reply is
-                # still a reply, and throwing it away is what made a dropped
-                # connection cost the whole turn rather than the rest of it.
-                #
-                # The calls go, for the same reason they go on a cancel. None of
-                # them ran, so nothing is lost by asking again -- and on
-                # anthropic a tool_use turn has to carry the signed thinking
-                # blocks that produced it, which a cut-off stream never finished
-                # handing over.
+                # Kept, like an interrupted round: half a reply is still a reply.
+                # The calls go -- none of them ran -- and anthropic additionally
+                # rejects a tool_use turn without the signed thinking behind it.
                 if usage: yield {"type": "usage", "usage": dict(usage), "model": model, **spent}
                 messages.append(p.assistant_message(thinking, content, []))
                 yield {"type": "assistant", "thinking": thinking, "content": content, "tool_calls": []}
@@ -662,17 +620,10 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         stream_retries = 0
 
         if stop():
-            # Stopped part-way through the reply. What streamed is kept: half a
-            # plan is still the plan the user is about to talk about, and
-            # throwing it away is what used to make the correction start from
-            # nothing.
-            #
-            # The calls are dropped, though, and they are the one thing that
-            # cannot be kept. None of them ran, so nothing is lost by asking for
-            # them again -- and on anthropic a tool_use turn has to carry the
-            # signed thinking blocks that produced it, which a cut-off stream
-            # never finished handing over. An assistant turn holding calls it
-            # cannot prove it thought about is rejected outright.
+            # Stopped mid-reply: what streamed is kept, half a plan is still the
+            # plan the user is about to talk about. The calls are dropped, the
+            # one thing that cannot be kept -- none ran, and anthropic wants the
+            # signed thinking behind any tool_use it replays.
             if thinking or content:
                 if usage: yield {"type": "usage", "usage": dict(usage), "model": model, **spent}
                 messages.append(p.assistant_message(thinking, content, []))
@@ -726,27 +677,16 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
             if stop():
                 yield from close_out()
                 return
-            # Which calls need asking is the tool's own decision, declared as
-            # require_permissions in its Description.md and narrowed per call by
-            # its own safe() -- see _needs_ask. Asked here for the same
-            # reason cancel is checked here: between calls is the last moment
-            # anything can be stopped, because a click that has already fired
-            # cannot be taken back. A refusal is reported like any other failed
-            # call rather than by skipping the yield -- the assistant message
-            # already holds these tool_calls, and a call left without a result
-            # is rejected on the next request.
+            # Whether to ask is the tool's own (require_permissions, narrowed per
+            # call by its safe(); see _needs_ask). Between calls is the last moment
+            # anything can be stopped. A refusal is reported as a failed call:
+            # the assistant message already holds these tool_calls.
             # reg, not registry(): what was offered is what may be dispatched.
-            # A name outside it comes back as an unknown tool rather than being
-            # executed, which is what makes `allow` a restriction and not a
-            # suggestion, and is also how a synthetic tool from `extra` is
-            # reachable at all.
             tool = reg.get(call.name)
-            # `background` is injected into the schema of any tool declaring
-            # itself backgroundable, so it arrives as an ordinary argument and
-            # has to come back out before the handler -- which knows nothing
-            # about any of this -- is handed the rest. Asked for on a tool that
-            # did not declare it, it is dropped: a model guessing the flag onto
-            # a click should get the click, not a job id.
+            # `background` rides in as an ordinary argument and comes back out
+            # before the handler, which knows nothing of it. Guessed onto a tool
+            # that never declared it, it is dropped: a guess gets the click,
+            # not a job id.
             args = dict(call.args or {})
             wants_bg = bool(args.pop("background", False)) and getattr(tool, "backgroundable", False)
             token = interrupt.Token()
@@ -767,12 +707,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
                 if state == "done":
                     result = value
                 elif state == "cancelled":
-                    # This call gets a result saying it was stopped mid-flight,
-                    # which is the truth and is not the same as the ones behind
-                    # it that never started: a half-finished click cannot be
-                    # taken back, and the model has to know it may have landed.
-                    # The token was set on the way here, so a tool that watches
-                    # for it stops rather than finishing into nothing.
+                    # Stopped mid-flight: the result says so -- it may have
+                    # landed, a half-finished click cannot be taken back -- and
+                    # the token is already set, so watching tools stop.
                     yield from close_out(running=call)
                     return
                 else:
@@ -787,14 +724,10 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         # Handed over as a round, not per call: anthropic and gemini require
         # every result from one round batched into a single message.
         messages.extend(p.result_messages(results))
-        # After the results, never before them: this lands as a user message,
-        # and the only place one is unambiguously legal for every provider is
-        # straight after a tool-result message. Recorded through the same yield
-        # the loop records everything else with, so a reload replays it.
-        # Both runtime notes go in one message, not two. They land as user
-        # messages, and two of those in a row is a 400 on anthropic -- but the
-        # deeper reason is that they are the same kind of thing to the model:
-        # the runtime saying what changed while it was busy.
+        # Runtime notes land after the results -- the only place a user message
+        # is legal for every provider -- and both in one message, not two: two
+        # user messages in a row is a 400, and they are one kind of thing to the
+        # model anyway (the runtime saying what changed while it was busy).
         stale = _todo_note(ctx) if since_todo >= TODO_STALE else ""
         if stale: since_todo = 0
         # Anything typed while this round was running goes in first and in the
@@ -806,12 +739,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         said = _steer_note(typed) if typed else ""
         runtime = "\n\n".join(n for n in (_finished_note(), stale) if n)
         note = "\n\n".join(n for n in (said, runtime) if n)
-        # Anything attached to those messages travels on this one, in the order
-        # it was sent. Through the adapter rather than by hand for the same
-        # reason the opening turn goes through it: three dialects, three shapes.
-        # Dropped for a model that cannot see -- the names stay in the note, so
-        # it can say it was sent something it cannot look at, which is better
-        # than a 400 that ends the run.
+        # Steered attachments ride the same message, through the adapter (three
+        # dialects, three shapes), and are dropped for a model that cannot see:
+        # the names stay in the note, which beats a 400 that ends the run.
         steer_images = [a["b64"] for m in typed for a in (m.get("images") or [])] if vision else []
         if note:
             messages.append(p.user_message(note, steer_images) if steer_images

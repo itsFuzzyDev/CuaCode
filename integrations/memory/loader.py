@@ -34,12 +34,10 @@ SCOPE_RE = re.compile(r"^(global|(projects|apps)/[a-z0-9][a-z0-9._-]{0,63})$")
 TYPES = ("user", "feedback", "project", "app", "reference")
 SOURCES = ("user", "agent", "external")
 
-# Where the current turn is happening, and what is on screen while it happens.
-# Set once per turn by the loop, because the two callers that need them -- the
-# tool's own description and the recall block -- are both called from places
-# that never see a ctx. cwd falls back to the worker's own, which is right often
-# enough and wrong harmlessly: the worst case is an index scoped to the wrong
-# project, not a path escape.
+# This turn's cwd and visible apps, set once per turn: both callers (the tool's
+# description and the recall block) run where no ctx reaches. cwd falls back to
+# the worker's own -- wrong harmlessly: at worst an index scoped to the wrong
+# project, never a path escape.
 _CWD = ""
 _APPS: list[str] = []
 

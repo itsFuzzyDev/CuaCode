@@ -25,12 +25,9 @@ def active_app_name() -> str:
 
 def capture():
     from PIL import Image
-    # BMP, not PNG. This file exists for about a millisecond and is read back
-    # by this same function, so compressing it buys nothing and costs
-    # everything: screencapture spends 130ms deflating a screenful of UI and
-    # PIL spends more inflating it again. Uncompressed round-trips in half the
-    # time and is the same pixels -- the PNG the agent actually receives is
-    # encoded once, later, from these.
+    # BMP, not PNG: the file lives for a millisecond and is read back right
+    # here, so compression is pure cost (screencapture 130ms to deflate, PIL
+    # more to inflate). The PNG the agent gets is encoded once, later.
     with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as f: tmp = f.name
     try:
         # -D 1 pins the shot to the main display. Left implicit, screencapture
