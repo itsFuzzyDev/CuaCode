@@ -27,12 +27,13 @@ Then run one:
 ./bin/deck        # built binary
 ./run.sh deck     # or straight from source, no build step
 ./run.sh          # list the frontends you have
+./run.sh --usage  # what every conversation has cost, no session started
 ```
 
 Building on its own is `./build.sh`, optionally with one frontend's name, or
 `--keep-going` to report failures at the end rather than stopping at the first
-- `gio` needs a C toolchain and platform headers, and the terminal frontends do
-not.
+- `bridge` needs a C toolchain and platform headers (it hosts the OS webview),
+  and the terminal frontend does not.
 
 ### Doing it by hand
 
@@ -62,11 +63,14 @@ no need to `activate` anything to run the app. A `venv/` or `.venv/` next to
 
 Nothing is configured out of the box. The first launch writes
 `~/.cuacode/config.json` (on Windows, `%USERPROFILE%\.cuacode\config.json`) as a
-fill-in-the-blank template with a blank entry per provider:
+fill-in-the-blank template with a blank entry per registered provider:
 
 ```json
 {
   "active": "ollama",
+  "vision":   "",
+  "effort":   "",
+  "always_skills": [],
   "providers": {
     "anthropic": {"model": "", "api_key": "", "params": {}},
     "ollama":    {"model": "", "api_key": "", "params": {}}
@@ -76,9 +80,12 @@ fill-in-the-blank template with a blank entry per provider:
 
 Fill in `model` and `api_key` for the one you want and set `active` to its name,
 or pick both from inside `deck` with `/provider` - the file is written either
-way. It is re-read every turn, so an edit lands on the next message without a
-restart. It holds API keys in plaintext and is chmod 0600 on every write (a
-no-op on Windows, where the file's protection is the profile directory's).
+way. `vision` picks the provider that looks at images (see Vision), `effort`
+sets the level a new conversation starts on, `always_skills` is the short list
+of skills held in the system prompt. It is re-read every turn, so an edit lands
+on the next message without a restart. It holds API keys in plaintext and is
+chmod 0600 on every write (a no-op on Windows, where the file's protection is
+the profile directory's).
 
 Everything else the agent keeps lives beside it:
 
@@ -86,6 +93,7 @@ Everything else the agent keeps lives beside it:
 ~/.cuacode/config.json      providers, keys, models, your permission lists
 ~/.cuacode/AGENTS.md        your standing instructions, in every conversation
 ~/.cuacode/sessions/        one directory per conversation
+~/.cuacode/memory/          what the agent has learned about you, one fact per file
 ~/.cuacode/subagents/*.md   yours; loaded next to the ones that ship
 ~/.cuacode/workflows/*.py
 ~/.cuacode/skills/<name>/
@@ -102,15 +110,16 @@ Everything else the agent keeps lives beside it:
 | `anthropic` | api.anthropic.com | `ANTHROPIC_API_KEY` |
 | `openai` | api.openai.com | `OPENAI_API_KEY` |
 | `openrouter` | openrouter.ai | `OPENROUTER_API_KEY` |
-| `groq` | api.groq.com | `GROQ_API_KEY` |
 | `nvidia` | integrate.api.nvidia.com | `NVIDIA_API_KEY` |
 | `deepseek` | api.deepseek.com | `DEEPSEEK_API_KEY` |
 | `together` | api.together.xyz | `TOGETHER_API_KEY` |
-| `lmstudio` | localhost:1234 | `LMSTUDIO_API_KEY` |
+| `qubrain` | qubrain.org | `QB_API_KEY` |
 
 The environment variable wins over the key in `config.json`, so a shell can
 override a stored key without editing anything. Anything OpenAI-compatible is
-one entry in `handler/agent/providers.py`.
+one line in `handler/agent/providers/__init__.py` - default model, base URL,
+key variable - and a local server (ollama local, litellm, LM Studio) joins the
+registry the same way, because the `ollama` dialect itself is cloud-only.
 
 `ollama` means ollama.com, not the daemon on your machine, and the model picker
 lists that account's catalog rather than `ollama list`. The agent opens every
@@ -118,9 +127,7 @@ conversation with roughly 10k tokens of instructions and environment and carries
 twenty-odd tool schemas beside it; models small enough to run at home follow
 that badly, and the failure is silent rather than loud. Either way in works and
 neither needs a key in the file: `ollama signin` through the desktop app leaves
-one in `~/.ollama/keys`, which is read when nothing else is set. Point a local
-daemon at it through the `lmstudio` entry (any `host:port`, it is just the
-OpenAI dialect) if you want to try one anyway.
+one in `~/.ollama/keys`, which is read when nothing else is set.
 
 **Vision is the thing that decides what the agent can do.** A model that cannot
 see is never handed the screenshot tools - offered them it would call them, and
@@ -128,8 +135,9 @@ the endpoint rejects the image with a 400 that costs the whole turn - so on a
 text-only model you get a capable CLI agent and no computer use. Capability is
 asked of the provider where it can be, learned from a refusal where it cannot,
 and remembered per model. A blind model can borrow eyes: set `vision` to another
-configured provider (`/provider` does this too) and `describe_image` routes
-screenshots through it.
+configured provider - a name, or `{"provider": ..., "model": ...}` to pin the
+model that does the looking - and `describe_image` routes screenshots through
+it; `/vision` does this from the deck palette.
 
 Thinking effort is per conversation, not per account: `off`, `low`, `medium`,
 `high`, `max`, set with `/effort` and stored with the session. Each provider's
@@ -158,8 +166,9 @@ another. Adding one never touches the others.
 ### Tools
 
 `WebFetch` `WebSearch` `agent` `app_list` `app_open` `background`
-`click` `describe_image` `file` `key` `mcp` `mouse_move` `photos`
-`screenshot` `scroll` `shell` `skill` `todo` `type_text` `wait` `workflow`
+`click` `describe_image` `file` `key` `mcp` `memory` `mouse_move`
+`photos` `screenshot` `scroll` `shell` `skill` `todo` `type_text`
+`wait` `workflow`
 
 The pointer-and-keyboard ones (`click`, `key`, `scroll`, `type_text`,
 `screenshot`, `app_open`, `app_list`) have a per-OS implementation behind one
@@ -169,10 +178,8 @@ The pointer-and-keyboard ones (`click`, `key`, `scroll`, `type_text`,
 
 | Name | What it is |
 | --- | --- |
-| `deck` | Terminal, the one to start with. Built on `sketch`: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+O` opens the call under the cursor in full - every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/help`, `/new`, `/provider`, `/effort`, `/model`, `/vision`, `/permissions`, `/clear`, `/quit`) and `@` a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command - `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there - and it is redrawn by replaying its stored records as ordinary events. Asks before the `file` and `shell` calls that change something - a read or a command that only looks runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact thing - a `file` **read**, or that one `shell` command - never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
-| `gio` | GUI window. Raw wire log - every envelope in and out, prefix tinted by state - with a status strip and an input bar. Enter sends, **Esc stops the run in flight**. Fonts are bundled (`go/frontends/gio/fonts/`); `CUACODE_FONT=/path/to.ttf` swaps the mono face without a rebuild. Needs a C toolchain to build. |
-| `sketch` | Terminal scaffold to design on top of. Plumbing is done (worker, session, input, scroll, spinner, Esc cancel); the look is deliberately bare. `main.go` is the wiring, `view.go` is the whole design surface. |
-
+| `deck` | Terminal, the one to start with: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+V` attaches an image to the message, `Ctrl+O` opens the call under the cursor in full - every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/help`, `/context`, `/usage`, `/new`, `/provider`, `/model`, `/effort`, `/vision`, `/params`, `/permissions`, `/clear`, `/quit`); a skill you have installed answers to `/<name>` as well. `@` opens a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command - `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there - and it is redrawn by replaying its stored records as ordinary events. Asks before the calls that can change something (`file`, `shell`, `WebFetch`, `WebSearch`, `mcp`, `workflow`) - a `file` read or a look-only command runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact call, never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
+| `bridge` | GUI window: the same action tape `deck` draws in a terminal, drawn in the OS webview (WKWebView on macOS, WebView2 on Windows, WebKitGTK on Linux) - no bundled browser, no second runtime. Go owns the worker and the session; every pixel is hand-written HTML/CSS/JS under `go/frontends/bridge/ui/`, embedded in the binary and served on loopback behind a random token, so the page loads nothing from the network. `--resume` opens the session picker, `--serve` prints the page's URL with no worker and no window. Enter sends, **Esc stops the run in flight**. Needs a C toolchain to build. |
 ### Adding a frontend
 
 Make `go/frontends/<name>/` with a `package main`, and let `runner` do the wiring:
@@ -189,7 +196,8 @@ sess.Snapshot()          // current state out
 ```
 
 Each `session.Event` carries the parsed worker envelope plus a `Snapshot`
-(state, msgs, turns, last streamed token, context left). It arrives on the
+(state, msgs, turns, last streamed token, context used and left, error, and
+the token rates of the generating round). It arrives on the
 worker's reader goroutine, so forward it to your own event loop rather than
 mutating UI state in the callback. A worker that dies arrives the same way, as
 an `error` status carrying its stderr, so a frontend that draws errors already
@@ -199,12 +207,14 @@ draws that one.
 (`session.list`, `session.new`, `session.load`, `session.delete`,
 `session.effort`, `provider.list`, `provider.use`, `provider.set`,
 `model.list`, `vision.use`, `permission.mode`, `tool.detail`,
-`background.list`, `background.kill`, `skill.list`); the reply arrives through the same event
+`background.list`, `background.kill`, `skill.list`, `context.report`,
+`usage.report`); the reply arrives through the same event
 callback, matched by the envelope ID.
 
 `build.sh` and `run.sh` pick up the new directory
-automatically - no registration anywhere. Copy `frontends/sketch/` as a
-starting point if you want the bubbletea scaffolding.
+automatically - no registration anywhere. Copy `frontends/deck/` for the
+bubbletea scaffolding; `frontends/bridge/` shows the other extreme, a window
+whose entire UI is a plain page.
 
 ### Cancelling
 
@@ -229,7 +239,7 @@ thinking rather than calling a tool it is discarded, not saved up for whatever
 runs next, so offer the key only while the UI shows a tool running.
 
 The agent can also start one itself: a tool declaring `backgroundable: true` in
-its frontmatter (`shell`, `agent`, `workflow`, `WebFetch`) gets a `background`
+its frontmatter (`shell`, `agent`, `workflow`, `WebFetch` and `WebSearch`) gets a `background`
 boolean added to its schema, and the loop routes the call to a job instead of
 waiting on it. Either way it is the same job, and the agent collects the result
 through the `background` tool. When one finishes, a one-line notice naming the
@@ -273,7 +283,8 @@ before.
 ### Tool permissions
 
 A tool declares `require_permissions: true` in its `Description.md` frontmatter
-(`file` and `shell` do). Before running one, the worker asks the frontend and
+(`file`, `shell`, `WebFetch`, `WebSearch`, `mcp` and `workflow` do). Before
+running one, the worker asks the frontend and
 **blocks until it answers** - there is no timeout, so a question left up
 overnight is still answered in the morning.
 
@@ -300,9 +311,9 @@ created has no patch to diff against, so its content is drawn as one all-new
 hunk. Long blocks are cut to keep the choices on screen and open with `Ctrl+O`.
 
 **Not every call is asked about.** `require_permissions` is a property of the
-tool, and per tool is too coarse for the two tools that have it: `file` reads
-far more often than it writes, and most shell commands only look at the
-machine. A tool that requires permission may define `safe(args, ctx) -> bool`
+tool, and per tool is too coarse: `file` reads far more often than it writes,
+and most shell commands only look at the machine. A tool that requires
+permission may define `safe(args, ctx) -> bool`
 in its `main.py` and answer for the specific call; the prompt is skipped when
 it says yes. It can only ever take a prompt away - a tool without
 `require_permissions` was never asked about either way - and it fails closed:
@@ -351,7 +362,7 @@ else is the error the frontend was not showing you.
 
 ## Extending it
 
-Three ways that need no Go and no restart - files are re-read every turn, so
+Four ways that need no Go and no restart - files are re-read every turn, so
 one written mid-conversation is usable in the next. The ones under
 `integrations/` ship with the app; the ones under `~/.cuacode/` are yours, and a
 name collision goes to yours.
