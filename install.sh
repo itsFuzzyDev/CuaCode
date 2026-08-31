@@ -5,9 +5,6 @@
 #   ./install.sh               everything
 #   ./install.sh --no-build    python side only (skip Go)
 #   ./install.sh --no-venv     install deps into the interpreter as found
-#
-# Windows has its own copy of this: install.ps1. The two stay in step by hand,
-# so a change here usually belongs there too.
 set -euo pipefail
 cd "$(dirname "$0")"
 

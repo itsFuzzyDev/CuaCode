@@ -165,12 +165,9 @@ class Session:
         # mid-session, `native` is only reusable by the dialect that wrote it.
         rec = {"t": "assistant", "ts": store.now_iso(), "p": self.provider,
                "thinking": thinking, "content": content, "calls": calls, "native": native}
-        # What the round cost, on the round rather than on a counter somewhere
-        # else. It is the only place the numbers are unambiguous -- one round,
-        # one model, one set of counts -- and it means a rewind takes the cost
-        # away with the turn instead of leaving the session charged for it.
-        # Absent when the provider reported nothing, which is not the same as
-        # zero and must not be recorded as it.
+        # What the round cost, on the round: one round, one model, unambiguous,
+        # and a rewind takes its cost with it. Absent when the provider reported
+        # nothing -- not the same as zero, and never recorded as it.
         if usage: rec["u"] = usage
         self._pending.append(rec)
 

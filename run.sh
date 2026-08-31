@@ -7,6 +7,19 @@ set -euo pipefail
 launch_dir="$PWD"      # where you ran this from, before either cd below
 cd "$(dirname "$0")"
 
+# Tripwire for a fresh clone: the worker's dependencies must exist before any
+# frontend is started, and a missing install should announce itself at the
+# front door instead of as a stack trace from inside the worker. One import
+# checks, install.sh is the only thing that fixes it, and the sentinel keeps
+# the check off every later launch (touching requirements.txt brings it back).
+sentinel="bin/.deps-ok"
+if [ ! -f "$sentinel" ] || [ requirements.txt -nt "$sentinel" ]; then
+    if ! "${CUACODE_PYTHON:-python3}" -c 'import ollama' >/dev/null 2>&1; then
+        ./install.sh || exit 1
+    fi
+    mkdir -p bin && touch "$sentinel"
+fi
+
 if [ $# -eq 0 ]; then
     echo "usage: ./run.sh <frontend>"
     echo "       ./run.sh --usage [--days N] [--json]"

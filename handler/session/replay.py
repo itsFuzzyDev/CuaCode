@@ -17,13 +17,10 @@ def to_messages(records: list[dict], provider: str, native_ok: bool = True,
     origin covers records written before per-record stamping. native_ok=False
     forces the rebuild path for every record.
     """
-    # Its own instance, with vision set from the config rather than from the
-    # registry default. result_messages decides whether to re-inflate stored
-    # images off p.vision, and the singleton's copy of that is whatever the
-    # class was written with -- so a conversation reopened on a model that
-    # cannot see would rebuild every screenshot straight back into the history
-    # and fail on the next request, permanently. Never the shared instance:
-    # this is a fact about one conversation, not about the provider.
+    # Its own instance, vision from config not the class default: result_messages
+    # re-inflates stored images off p.vision, and the class default would fail the
+    # next request permanently on a model that cannot see. new(), never the
+    # shared singleton -- this is a fact about one conversation.
     from handler import config          # imported late: config imports providers
     p = providers.new(provider)
     p.vision = config.can_see(provider) if vision is None else vision
@@ -48,12 +45,10 @@ def to_messages(records: list[dict], provider: str, native_ok: bool = True,
             providers.append_user_text(turn, providers.attachment_note(attached))
             msgs.append(turn)
         elif t == "recall":
-            # Folded into the user turn it was attached to rather than sent as
-            # its own message: anthropic rejects two user messages in a row, and
-            # this is a note about that message, not another one. Only ever
-            # written directly after a user record, so the merge is the live
-            # path exactly -- if it somehow is not, it stands alone rather than
-            # attaching itself to an assistant turn.
+            # A recall note rides the user turn it was attached to (anthropic
+            # rejects two user messages in a row, and it is a note about that
+            # message, not a new one); standalone if it somehow has no user turn
+            # behind it.
             flush()
             if msgs and msgs[-1].get("role") == "user":
                 # append_user_text rather than a concatenation: a user turn with

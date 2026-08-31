@@ -79,12 +79,9 @@ class _Legacy(Exception):
     """Internal: the probe decided this server predates the stateless era."""
 
 
-# --------------------------------------------------------------------------
-# HTTP request metadata (modern era)
-# --------------------------------------------------------------------------
-# Streamable HTTP mirrors selected body fields into headers so a load balancer
-# can route without parsing the body, and the server rejects the request if the
-# two disagree. Everything below exists to make the mirror exact.
+# HTTP request metadata (modern era): streamable HTTP mirrors selected body
+# fields into headers so a router need not parse the body; a mismatch is
+# rejected, so everything below keeps the mirror exact.
 
 _TCHAR = re.compile(r"^[-!#$%&'*+.^_`|~0-9A-Za-z]+$")   # RFC 9110 field-name token
 _SENTINEL = re.compile(r"^=\?base64\?.*\?=$", re.S)
@@ -804,22 +801,11 @@ def close_all():
             pass
 
 
-# --------------------------------------------------------------------------
-# Session scope
-# --------------------------------------------------------------------------
-# A ContextVar, not a field on the connection: the same server process serves
-# many logical sessions, and which one a call belongs to is a property of the
-# run making it, not of the connection. The subagent runner sets a fresh scope
-# per subagent run, so parallel subagents each get their own browser session
-# instead of sharing one page and stomping on each other. The top-level
-# conversation leaves it None and uses the server's default session, matching
-# the old stdio behaviour.
-#
-# How the id travels depends on the era. Legacy HTTP servers route by the
-# `Mcp-Session-Id` header (lightpanda's transport does). The stateless era has
-# no such header and no protocol sessions at all: a server that needs state
-# across calls mints a handle and expects it back as an ordinary tool argument,
-# so the same scope dict carries a handle instead of a header value.
+# Session scope. A ContextVar, not a connection field: parallel subagents each
+# get their own browser session (the runner sets a fresh scope per run), and the
+# top-level conversation leaves it None for the server's default. Legacy servers
+# route by the Mcp-Session-Id header; the stateless era mints a handle that the
+# same scope dict carries as an ordinary tool argument.
 
 _mcp_sessions: ContextVar[dict | None] = ContextVar("mcp_sessions", default=None)
 

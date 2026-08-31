@@ -122,12 +122,10 @@ def rollup(days: int = 0, metas: list[dict] = None) -> dict:
 
         counted += 1
         _merge(total, kept)
-        # Model and day are both stamped per round, but meta.json keeps them as
-        # two separate breakdowns rather than one crossed table -- the crossing
-        # lives in the records, and a rollup is not worth reopening a hundred
-        # transcripts for. So with a day filter on, a session contributes to the
-        # per-model figures only when all of it falls inside the window;
-        # a half-counted session would overstate whichever model it used.
+        # Per-model and per-day are stamped per round but kept as two separate
+        # breakdowns -- the crossing lives in the records, and a rollup is not
+        # worth reopening transcripts. A day filter counts a session only when
+        # all of it falls inside; half a session overstates its model.
         whole = kept["rounds"] == u.get("rounds")
         for name, spent in (u.get("models") or {}).items():
             if not cutoff or whole: _merge(models[name], spent)

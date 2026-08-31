@@ -180,13 +180,9 @@ def params_for(name: str, model: str, cfg: dict = None) -> dict:
     return {k: v for k, v in merged.items() if k not in LOCAL_KEYS}
 
 
-# Bumped whenever capabilities() learns to report something it did not before.
-# An answer recorded under an older revision is not wrong, it is short: it was
-# written by code that never looked for the new field, so an absent capability
-# means "not asked about" rather than "not supported". Reading it as the latter
-# is how a model permanently loses a knob it has -- the reason this counter
-# exists is that "thinking" was added to the openrouter answer after entries
-# had already been written without it.
+# Bumped whenever capabilities() learns to report something new: an older
+# recorded answer is short, not wrong, and reading "absent" as "refused" is
+# how a model permanently lost its thinking knob.
 CAPS_REV = 2
 
 def model_caps(name: str, model: str, cfg: dict = None) -> list | None:
@@ -387,12 +383,9 @@ def use(name: str) -> dict:
     _WINDOWS.clear()             # the next turn asks the new provider its own size
     return save(cfg)
 
-# Windows already established this process, keyed by provider and model. The
-# provider is asked over the network, and the question comes up once per
-# request; a table of model names is deliberately *not* what is cached here,
-# because there is no such table anywhere in this file. Cleared whenever the
-# provider or model changes, so a switch re-asks rather than reporting the
-# previous model's window.
+# Windows already established this process, keyed by provider and model -- the
+# endpoint is asked over the network once per request, and the table clears on
+# any switch so a new pairing is asked, not reported.
 _WINDOWS: dict[tuple, int] = {}
 
 def context_window(name: str, model: str, cfg: dict = None) -> int:
@@ -481,12 +474,9 @@ def update(name: str, model: str = None, key: str = None, vision=None, params: d
         e.pop("blind_models", None)
     # Merged, not replaced: setting num_ctx should not drop temperature.
     if params is not None: e["params"] = {**(e.get("params") or {}), **params}
-    # Same merge, one model deep: {"gpt-5.6-mini": {"temperature": 0}} touches
-    # that model's params and leaves every other model's alone. A null value
-    # removes an override rather than setting the key to nothing -- there is no
-    # other way to say "let the provider-wide value through again". A model left
-    # with no overrides drops out, so the file does not collect empty rows for
-    # every model ever touched.
+    # Same merge, one model deep. A null override removes, which is the only
+    # way to let the provider-wide value through again; emptied models drop
+    # out, so no empty rows collect in the file.
     if model_params is not None:
         mp = dict(e.get("model_params") or {})
         for mname, vals in model_params.items():
@@ -522,12 +512,10 @@ def listing(cfg: dict = None) -> list[dict]:
                     "model": model,
                     "base_url": getattr(p, "base_url", None),
                     "vision": e.get("vision", getattr(p, "vision", True)),
-                    # The same five rungs everywhere, so the picker is one
-                    # widget regardless of provider, plus what each rung would
-                    # actually send to this model -- a slider whose effect is
-                    # invisible is a slider nobody trusts, and it is also how
-                    # you see a rung that quirks have quietly emptied out.
-                    # The level itself is not here: it belongs to the session.
+                    # One rung list for every provider, plus what each rung
+                    # would actually send to this model: a slider whose effect
+                    # is invisible is not trusted, and it shows a rung quirks
+                    # have emptied out.
                     "effort_rungs": list(effort.LADDER),
                     "effort_map": override or {},
                     "effort_preview": {lvl: effort.resolve(name, p.name, model, lvl,

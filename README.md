@@ -15,18 +15,11 @@ One script does the whole thing: finds an interpreter, makes a venv, installs
 the dependencies, builds every frontend.
 
 ```bash
-# macOS / Linux
 ./install.sh
 ```
 
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-Flags: `--no-build` / `-NoBuild` for the Python side only, `--no-venv` /
-`-NoVenv` to install into the interpreter as found. Re-running is safe - an
-existing `venv/` is reused.
+Flags: `--no-build` for the Python side only, `--no-venv` to install into the
+interpreter as found. Re-running is safe - an existing `venv/` is reused.
 
 Then run one:
 
@@ -36,22 +29,16 @@ Then run one:
 ./run.sh          # list the frontends you have
 ```
 
-```powershell
-.\bin\deck.exe
-.\run.ps1 deck
-.\run.ps1
-```
-
-Building on its own is `./build.sh` (`.\build.ps1`), optionally with one
-frontend's name, or `--keep-going` / `-KeepGoing` to report failures at the end
-rather than stopping at the first - `gio` needs a C toolchain and platform
-headers, and the terminal frontends do not.
+Building on its own is `./build.sh`, optionally with one frontend's name, or
+`--keep-going` to report failures at the end rather than stopping at the first
+- `gio` needs a C toolchain and platform headers, and the terminal frontends do
+not.
 
 ### Doing it by hand
 
 ```bash
 python3 -m venv venv
-./venv/bin/pip install -r requirements.txt      # windows: venv\Scripts\pip
+./venv/bin/pip install -r requirements.txt
 ./build.sh
 ```
 
@@ -215,7 +202,7 @@ draws that one.
 `background.list`, `background.kill`, `skill.list`); the reply arrives through the same event
 callback, matched by the envelope ID.
 
-`build.sh` and `run.sh` (and their `.ps1` twins) pick up the new directory
+`build.sh` and `run.sh` pick up the new directory
 automatically - no registration anywhere. Copy `frontends/sketch/` as a
 starting point if you want the bubbletea scaffolding.
 
