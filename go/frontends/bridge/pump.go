@@ -52,6 +52,7 @@ type wireEvent struct {
 // the page routes each batch to its own feed.
 type batch struct {
 	Session string           `json:"session,omitempty"`
+	Project string           `json:"project,omitempty"` // the directory the app works on, for the navbar
 	Events  []wireEvent      `json:"events"`
 	Status  session.Snapshot `json:"status"`
 	Loading bool             `json:"loading"`
@@ -60,6 +61,7 @@ type batch struct {
 type pump struct {
 	w       view
 	session string // the session this pump belongs to, for the batch
+	project string // the directory the app works on, for the navbar tag
 
 	mu      sync.Mutex
 	events  []wireEvent
@@ -134,7 +136,7 @@ func (p *pump) flush() {
 		p.mu.Unlock()
 		return
 	}
-	b := batch{Session: p.session, Events: p.events, Status: p.snap, Loading: p.loading}
+	b := batch{Session: p.session, Project: p.project, Events: p.events, Status: p.snap, Loading: p.loading}
 	p.events, p.pending, p.loading = nil, false, false
 	p.mu.Unlock()
 

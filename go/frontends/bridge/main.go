@@ -75,9 +75,10 @@ func main() {
 	defer w.Destroy()
 	w.SetTitle(appName)
 	w.SetSize(1000, 720, webview.HintNone)
+	styleTitlebar(w.Window())
 
 	ws := newWorkspace(w)
-	if _, err := ws.newSession(); err != nil {
+	if _, err := ws.newSession(""); err != nil {
 		die(err)
 	}
 	defer ws.closeAll()
@@ -129,6 +130,22 @@ func bind(w webview.WebView, ws *workspace) {
 	must(w.Bind("goCancel", func() { ws.activeSess().sess.Cancel() }))
 	must(w.Bind("goBackground", func() { ws.activeSess().sess.Background() }))
 	must(w.Bind("goCommand", func(action string, fields map[string]any) { ws.activeSess().sess.Command(action, fields) }))
+	// Open an archived conversation in the active session's worker. Not a
+	// goCommand call: the pump's loading flag has to flip first, so the
+	// replay announces itself as a resume rather than a new conversation.
+	must(w.Bind("goLoad", func(id string) {
+		p := ws.activeSess()
+		p.pump.loading = true
+		p.sess.Command("session.load", map[string]any{"id": id})
+	}))
+	// The native folder picker: webview_go has no dialog API, so NSOpenPanel is
+	// called by hand (picker_darwin.go), modal on this thread the way AppKit
+	// pickers are. "" is a cancel. Paired with goNewSession by the palette -
+	// it is also how a new project comes to exist.
+	must(w.Bind("goPickFolder", func() string { return pickFolder() }))
+	// The icon picker: the same panel in file mode, answering {name, mime,
+	// b64} the way goClipboard does - the page downscales and data-URLs it.
+	must(w.Bind("goPickIcon", func() string { return pickImage() }))
 	must(w.Bind("goReply", func(id, typ string, fields map[string]any) { ws.activeSess().sess.Reply(id, typ, fields) }))
 
 	// The window's own name, set from the page. The webview does not follow
@@ -139,6 +156,10 @@ func bind(w webview.WebView, ws *workspace) {
 	must(w.Bind("goTitle", func(title string) {
 		if title = strings.TrimSpace(title); title != "" {
 			w.SetTitle(title)
+			// A title change re-lays the titlebar, and no notification
+			// covers it - the lights drift the moment a session gets named
+			// or the user switches sessions. Park them again.
+			reapplyLights(w.Window())
 		}
 	}))
 
@@ -149,8 +170,10 @@ func bind(w webview.WebView, ws *workspace) {
 
 	// The workspace: start a fresh worker, switch which one is active, or close
 	// one. goNewSession and goClose return the id the page should show next.
-	must(w.Bind("goNewSession", func() string {
-		id, err := ws.newSession()
+	// An empty dir means the launch directory; the palette hands over the dir
+	// of the project (or the freshly picked folder) the session is for.
+	must(w.Bind("goNewSession", func(dir string) string {
+		id, err := ws.newSession(dir)
 		if err != nil {
 			return ""
 		}

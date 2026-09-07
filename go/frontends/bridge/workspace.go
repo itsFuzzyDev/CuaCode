@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"cuacode/core/protocol"
@@ -38,7 +40,11 @@ func newWorkspace(w webview.WebView) *workspace {
 
 // newSession spawns a fresh worker and makes it active. The first session is
 // "default" - the page boots with that id - and later ones are s2, s3, ...
-func (ws *workspace) newSession() (string, error) {
+// An empty dir means the launch directory; a named dir (from the palette, or
+// the folder picker) becomes this session's own working directory, project tag
+// and store record in one move: the worker takes CWD from the startup
+// TerminalInfo, and everything downstream follows it.
+func (ws *workspace) newSession(dir string) (string, error) {
 	ws.mu.Lock()
 	ws.seq++
 	id := "default"
@@ -49,6 +55,20 @@ func (ws *workspace) newSession() (string, error) {
 	ws.mu.Unlock()
 
 	p := &pump{w: ws.w, session: id}
+	if dir == "" || dir == "." {
+		dir = session.WorkingDir()
+	}
+	if dir == "" || dir == "/" || dir == "." {
+		// An app-bundle launch has no launch directory - the process starts
+		// at "/", which is no place to work. Sessions default into home; the
+		// palette is right there to pick a real project. The shell tool takes
+		// its start dir from the TerminalData below, so the worker never
+		// needs to actually run in either spot.
+		if home, err := os.UserHomeDir(); err == nil {
+			dir = home
+		}
+	}
+	p.project = filepath.Base(dir)
 	// A session created after the page loaded can be evaluated into at once; a
 	// held-back startup line would be a window that opens blank.
 	if ready {
@@ -56,7 +76,17 @@ func (ws *workspace) newSession() (string, error) {
 	}
 	sess, err := runner.StartWith(p.emit, session.Options{
 		TerminalInfo: func() protocol.TerminalData {
-			return protocol.TerminalData{Program: appName, CWD: session.WorkingDir()}
+			// FrontmostApp is what the window tools take as the agent's own
+			// app - the one that gets parked in the left strip while the app
+			// being driven gets the rest. A terminal frontend captures the
+			// shell's app; a GUI frontend has no shell, and its own process
+			// is the window the agent lives in. (Window title, not process
+			// name: the dock/task-switcher name follows the binary.)
+			self := appName
+			if exe, err := os.Executable(); err == nil {
+				self = filepath.Base(exe)
+			}
+			return protocol.TerminalData{Program: appName, CWD: dir, FrontmostApp: self}
 		},
 	})
 	if err != nil {
@@ -70,11 +100,34 @@ func (ws *workspace) newSession() (string, error) {
 	return id, nil
 }
 
-// activeSess returns the session the bindings should talk to.
+// activeSess returns the session the bindings should talk to. A binding can
+// land when the active id has gone stale - the page closed its last tab and
+// the replacement worker never registered - and a nil here is the window dying
+// on the next keystroke, so it heals instead: any survivor first, then a fresh
+// worker, by the same rule boot uses (a workspace that cannot spawn is fatal).
 func (ws *workspace) activeSess() *wsSession {
 	ws.mu.Lock()
+	s := ws.sessions[ws.active]
+	ws.mu.Unlock()
+	if s != nil {
+		return s
+	}
+	ws.mu.Lock()
+	for nid, ns := range ws.sessions {
+		ws.active, s = nid, ns
+		break
+	}
+	ws.mu.Unlock()
+	if s != nil {
+		return s
+	}
+	id, err := ws.newSession("")
+	if err != nil {
+		die(err)
+	}
+	ws.mu.Lock()
 	defer ws.mu.Unlock()
-	return ws.sessions[ws.active]
+	return ws.sessions[id]
 }
 
 // switchTo makes a session active. Unknown ids are ignored.
