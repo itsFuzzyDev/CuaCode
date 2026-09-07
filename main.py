@@ -22,17 +22,22 @@ from integrations.skills import loader as skills
 SETTINGS = config.settings()
 
 ipc = IPC()
-ipc.send("status", {"state": "ready"})
 Ctx = type('Ctx', (dict,), {'self_identity': property(lambda s: s.get("frontmost_app")), 'session_dir': property(lambda s: s.get("session_dir")),
                             'cwd': property(lambda s: s.get("cwd"))})
 ctx = Ctx(ipc.terminal_info)
 
-# A session exists from boot; nothing touches disk until a round commits, so a
-# launch-and-close leaves no empty dirs. Effort starts at the account default:
-# without it, every restart fell back to the provider's idea of enough thinking.
+# A session exists from boot and its folder is born when the terminal envelope
+# lands (Session.persist, below); a clean exit with nothing recorded deletes the
+# folder again, so a launch-and-close still leaves nothing. Effort starts at the
+# account default: without it, every restart fell back to the provider's idea of
+# enough thinking.
 sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
                       effort_level=config.default_effort())
 messages = sess.messages()
+# The ready line carries the session's store id, so a frontend can tie its live
+# row to the record this worker will one day commit -- without it the same
+# conversation shows twice the moment the frontend reads session.list.
+ipc.send("status", {"state": "ready", "session_id": sess.id})
 # Tools run in this process, so the memory tool retitles the object the loop is
 # holding rather than the file underneath it -- a write to meta.json would be
 # undone by the next commit, which persists the whole dict from memory.
@@ -211,13 +216,34 @@ def announce_title(env=None):
 # message, and the user is about to send one of their own.
 pending_note = ""
 
+
+def projects_data(**extra):
+    """The tree's project payload, identical on every projects reply: the
+    promoted dirs, the pin order, the custom names and icons. One shape, so
+    the frontend never re-asks and no reply can forget a field."""
+    names, icons = store.list_project_details()
+    return {"projects": store.list_projects(), "pinned": store.list_pinned(),
+            "names": names, "icons": icons, **extra}
+
+
+def drop_empty(s):
+    """A session that never recorded anything leaves nothing behind. Its
+    folder was born at the terminal envelope (Session.persist); on a close,
+    a stop, or a conversation being swapped out, an empty one dies with it.
+    Anything with a record -- even just the user's message from a run that
+    never answered -- is kept."""
+    if not s._records:
+        store.delete(s.id)
+
 while True:
     # The frontend is gone: pipe EOF or reparented to launchd, so exit rather
-    # than poll an empty inbox forever. Mirrors `stop`: background work asked to
-    # stop first, then the session is committed.
+    # than poll an empty inbox forever. Mirrors `stop`: background work asked
+    # to stop first, then the session is committed -- and an empty one is
+    # dropped, so an opened-but-never-used session leaves no folder.
     if ipc.eof() or os.getppid() == 1:
         JOBS.kill_all()
         sess.commit()
+        drop_empty(sess)
         sys.exit(0)
     # Names that finished while the loop was busy. Applied here rather than on
     # the thread that produced them, so meta.json has one writer and stdout has
@@ -238,8 +264,11 @@ while True:
             ipc.terminal_info = env.data
             ctx = Ctx(ipc.terminal_info)
             # The boot session was created before this envelope landed, so its
-            # frontend is stamped here rather than at create().
+            # frontend is stamped here rather than at create() -- and this is
+            # where the session becomes real: its folder is born with the cwd
+            # and the frontend on it, before the first round commits.
             sess.set_frontend(ctx.get("term_program") or "")
+            sess.persist(ctx.get("cwd") or "")
             continue
         if env.type != "cmd": continue
         action = env.data.get("action")
@@ -250,6 +279,7 @@ while True:
             # something kills it on the way out.
             JOBS.kill_all()
             sess.commit()
+            drop_empty(sess)
             ipc.reply(env, "status", {"state": "stopped"})
             sys.exit(0)
         elif action == "cancel":
@@ -315,6 +345,55 @@ while True:
 
         elif action == "session.list":
             ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})
+
+        # The tree's project list: directories the user promoted, persisted in
+        # projects.json. Every reply carries the whole payload - the fresh
+        # list, the pin order, the custom names and icons (projects_data) - so
+        # the frontend never re-asks; the envelope type is "projects" either way.
+        elif action == "project.list":
+            ipc.reply(env, "projects", projects_data())
+        elif action == "project.add":
+            try:
+                d = store.add_project(env.data.get("dir", ""))
+                ipc.reply(env, "projects", projects_data(added=d))
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "project.rename":
+            # Custom display name and/or icon (one emoji) for a promoted
+            # project. Cosmetics only: the group key stays the basename.
+            try:
+                store.rename_project(env.data.get("dir", ""),
+                                     env.data.get("name", ""), env.data.get("icon", ""))
+                ipc.reply(env, "projects", projects_data())
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "project.remove":
+            try:
+                gone = store.remove_project(env.data.get("dir", ""))
+                ipc.reply(env, "projects", projects_data(removed=gone))
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "project.pin":
+            # Pin order is the tree's ordering, persisted with the projects so
+            # a new window opens the way the last one was left.
+            try:
+                on = bool(env.data.get("on", True))
+                store.pin_project(env.data.get("name", ""), on)
+                ipc.reply(env, "projects", projects_data())
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "project.move":
+            # One slot up/down within the section the group sits in (pin order
+            # for pinned groups, promotion order for the rest). Not a drag:
+            # the tree's order is explicit state, moved by explicit commands.
+            try:
+                try: delta = int(env.data.get("delta") or 0)
+                except (TypeError, ValueError): delta = 0
+                store.move_project(env.data.get("name", ""), env.data.get("dir", ""), delta)
+                ipc.reply(env, "projects", projects_data())
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+
         elif action == "provider.list":
             # listing() never carries a key, only has_key -- this crosses the
             # wire and lands in frontend logs.
@@ -421,6 +500,7 @@ while True:
             instructions.forget(sess.id)
             # Last round's cost belonged to the conversation that just went.
             LAST_TURN.clear()
+            drop_empty(sess)
             sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model", ""),
                                   effort_level=sess.effort, frontend=ctx.get("term_program") or "")
             messages = sess.messages()
@@ -435,6 +515,7 @@ while True:
                 loaded = Session.open(env.data.get("id", ""))
                 loaded.restore_tool_state()
                 LAST_TURN.clear()
+                drop_empty(sess)
                 sess, messages = loaded, loaded.messages()
                 naming.set_live(sess)
                 # The status goes first so a frontend can clear whatever it was
@@ -454,6 +535,26 @@ while True:
                 sid = env.data.get("id", "")
                 ipc.reply(env, "status", {"state": "deleted" if store.delete(sid) else "error", "session_id": sid})
             except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "session.archive":
+            # The tree's trash can: out of every listing, back by moving the
+            # folder in. Not a delete - nothing is lost.
+            try:
+                sid = env.data.get("id", "")
+                ipc.reply(env, "status", {"state": "archived" if store.archive(sid) else "error", "session_id": sid})
+            except ValueError as e:
+                ipc.reply(env, "status", {"state": "error", "error": str(e)})
+        elif action == "session.pin":
+            # The tree's pin, persisted on the meta like the projects are. The
+            # reply is a fresh sessions list, so the frontend re-stamps its
+            # pins from it instead of re-asking.
+            try:
+                sid = env.data.get("id", "")
+                on = bool(env.data.get("on", True))
+                if sid == sess.id: sess.set_pinned(on)
+                else: store.pin_session(sid, on)
+                ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})
+            except (ValueError, FileNotFoundError) as e:
                 ipc.reply(env, "status", {"state": "error", "error": str(e)})
         elif action == "chat":
             # Config is re-read every turn: the user edits it, and a model

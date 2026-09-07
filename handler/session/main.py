@@ -149,6 +149,17 @@ class Session:
             self.meta["frontend"] = name
             if self._records: store.write_json(self.dir / "meta.json", self.meta)
 
+    def set_pinned(self, on: bool):
+        """The tree's pin, persisted with the conversation: an iso ts, order
+        being oldest pin first. Written even before the first round commits --
+        meta.json exists from birth, and commit rewrites it from memory, so a
+        pin set any other way on the live session would be lost."""
+        if on:
+            if not self.meta.get("pinned"): self.meta["pinned"] = store.now_iso()
+        else:
+            self.meta.pop("pinned", None)
+        store.write_json(self.dir / "meta.json", self.meta)
+
     def set_cwd(self, path: str):
         """Where this conversation is happening. Recorded for recall: matching
         directories is the strongest signal there is for "what did we do here
@@ -157,6 +168,18 @@ class Session:
         if path and path != self.meta.get("cwd"):
             self.meta["cwd"] = str(path)
             if self._records: store.write_json(self.dir / "meta.json", self.meta)
+
+    def persist(self, cwd: str = ""):
+        """Make the session real before its first round commits: meta.json on
+        disk, no messages yet. Called when the worker learns where it lives
+        (the terminal envelope), so a live session is in the store from birth
+        -- the tree and palette can list it, and a hard kill leaves it
+        findable. The other side of the deal lives in main.py: a clean exit
+        with nothing recorded deletes the folder again, so an opened-but-never-
+        used session leaves nothing behind."""
+        if self._records: return   # a committed session already persists itself
+        if cwd and not self.meta.get("cwd"): self.meta["cwd"] = str(cwd)
+        store.write_json(self.dir / "meta.json", self.meta)
 
     def add_assistant(self, thinking: str, content: str, native: list, usage: dict = None):
         calls = [{"name": c.name, "args": c.args}
