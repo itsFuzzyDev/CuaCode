@@ -196,3 +196,51 @@ func TestOneStatusPerBatch(t *testing.T) {
 type errParse struct{}
 
 func (errParse) Error() string { return "unreadable" }
+
+// The store's reply is typed on the envelope and carries no data.state, so the
+// page routes it by type. If that shape ever changes the sidebar's archive
+// empties silently - and the demo cannot catch it, it paints a fake list.
+func TestSessionsReplyCrossesThePumpTyped(t *testing.T) {
+	line := []byte(`{"type":"sessions","id":"x","data":{"sessions":[{"id":"a","title":"t","cwd":"/w","updated":"2026-09-04T10:00:00+00:00"}],"active":"a"}}`)
+	parsed, err := protocol.ParseEvent(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Type != "sessions" || parsed.State != "" {
+		t.Fatalf("parsed type=%q state=%q; fold routes on state, falling back to type", parsed.Type, parsed.State)
+	}
+
+	v := &fakeView{done: make(chan struct{}), want: 1}
+	p := newPump(v)
+	p.emit(session.Event{Parsed: parsed})
+	waitFor(t, v)
+
+	b := decode(t, v.scripts()[0])
+	if b.Events[0].Type != "sessions" || b.Events[0].State != "" {
+		t.Fatalf("wire event = %+v, want type sessions with an empty state", b.Events[0])
+	}
+}
+
+// The projects reply is the same class of wire shape: an envelope type, no
+// data.state. The boot archive bug was a fold case that only answered to
+// state; the projects list is pinned into the same guarantee.
+func TestProjectsReplyCrossesThePumpTyped(t *testing.T) {
+	line := []byte(`{"type":"projects","id":"x","data":{"projects":["/w/core"]}}`)
+	parsed, err := protocol.ParseEvent(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Type != "projects" || parsed.State != "" {
+		t.Fatalf("parsed type=%q state=%q; fold routes on state, falling back to type", parsed.Type, parsed.State)
+	}
+
+	v := &fakeView{done: make(chan struct{}), want: 1}
+	p := newPump(v)
+	p.emit(session.Event{Parsed: parsed})
+	waitFor(t, v)
+
+	b := decode(t, v.scripts()[0])
+	if b.Events[0].Type != "projects" || b.Events[0].State != "" {
+		t.Fatalf("wire event = %+v, want type projects with an empty state", b.Events[0])
+	}
+}

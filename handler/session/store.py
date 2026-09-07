@@ -85,6 +85,125 @@ def list_sessions() -> list[dict]:
         if meta: out.append(meta)
     return out
 
+# ---- projects ----
+# A project is a directory the user said matters, not any directory a session
+# ever happened to start in. The list is the tree's whitelist; every session
+# stays findable through the palette regardless.
+
+def projects_path() -> Path: return home() / "projects.json"
+
+def list_projects() -> list[str]:
+    return [p for p in read_json(projects_path()).get("projects", []) if isinstance(p, str)]
+
+def list_pinned() -> list[str]:
+    """Project group names in pin order (oldest pin first). By name, not dir:
+    the pin rides the tree's group, and the tree groups by basename."""
+    return [p for p in read_json(projects_path()).get("pinned", []) if isinstance(p, str)]
+
+def list_project_details() -> tuple[dict, dict]:
+    """Custom display names and icons per promoted dir. The group key stays
+    the basename; a custom name is render-only cosmetics."""
+    data = read_json(projects_path())
+    names = {d: n for d, n in (data.get("names") or {}).items() if isinstance(d, str) and isinstance(n, str)}
+    icons = {d: i for d, i in (data.get("icons") or {}).items() if isinstance(d, str) and isinstance(i, str)}
+    return names, icons
+
+def rename_project(d: str, name: str, icon: str) -> tuple[dict, dict]:
+    """Set a project's display name and/or icon. An icon is one of: one emoji
+    (up to 8 chars), a gradient circle "grad:<n>", or an uploaded image
+    "img:data:image/...;base64,..." as the page downscaled it (capped at
+    96KB). Anything else is dropped rather than stored. Empty string clears
+    the field, falling back to the plain folder. Any real directory may
+    carry details - the launch repo's group is not promoted, and Boaz wants
+    it editable like the rest; the fields only ever render on a group that
+    exists in the tree."""
+    p = _norm_dir(d)
+    if not Path(p).is_dir(): raise ValueError(f"no such directory: {p}")
+    data = read_json(projects_path())
+    names, icons = data.get("names") or {}, data.get("icons") or {}
+    name = (name or "").strip()[:60]
+    icon = (icon or "").strip()
+    ok = (icon.startswith("img:data:image/") and len(icon) <= 98304) \
+        or (icon.startswith("grad:") and len(icon) <= 12) \
+        or (not icon.startswith(("img:", "grad:")) and len(icon) <= 8)
+    if not ok: icon = ""
+    if name: names[p] = name
+    else: names.pop(p, None)
+    if icon: icons[p] = icon
+    else: icons.pop(p, None)
+    data["names"], data["icons"] = names, icons
+    write_json(projects_path(), data)
+    return names, icons
+
+def pin_project(name: str, on: bool) -> list[str]:
+    """Pin/unpin a project group. Idempotent; returns the pin order."""
+    if not name or not isinstance(name, str): raise ValueError("project name required")
+    cur = list_pinned()
+    if on and name not in cur: cur.append(name)
+    if not on and name in cur: cur.remove(name)
+    data = read_json(projects_path())
+    data["pinned"] = cur
+    write_json(projects_path(), data)
+    return cur
+
+def move_project(name: str, dir_: str, delta: int) -> None:
+    """Move a group one slot up/down: within the pin order for a pinned
+    group, within the promotion order otherwise. The tree renders exactly
+    these two orders, so this is all the reordering there is. No-op at the
+    edges and for a group that is in neither list."""
+    if not name or not isinstance(name, str): raise ValueError("project name required")
+    delta = 1 if (delta or 0) > 0 else -1
+    data = read_json(projects_path())
+    pinned = [p for p in (data.get("pinned") or []) if isinstance(p, str)]
+    if name in pinned:
+        i = pinned.index(name)
+        j = i + delta
+        if 0 <= j < len(pinned):
+            pinned[i], pinned[j] = pinned[j], pinned[i]
+            data["pinned"] = pinned
+            write_json(projects_path(), data)
+        return
+    dirs = [p for p in (data.get("projects") or []) if isinstance(p, str)]
+    i = next((k for k, d in enumerate(dirs) if d == dir_), -1)
+    if i < 0:  # by basename, since the tree only knows names
+        i = next((k for k, d in enumerate(dirs) if Path(d).name == name), -1)
+    j = i + delta
+    if 0 <= i and 0 <= j < len(dirs):
+        dirs[i], dirs[j] = dirs[j], dirs[i]
+        data["projects"] = dirs
+        write_json(projects_path(), data)
+
+def _norm_dir(d: str) -> str:
+    """Expand and normalize a directory argument. Not required to exist: the
+    tree hands over basenames, and a promoted folder may since have moved."""
+    if not d or not isinstance(d, str): raise ValueError("project dir required")
+    return str(Path(d).expanduser().resolve())
+
+def add_project(d: str) -> str:
+    """Promote a directory. Idempotent; returns the normalized path."""
+    p = Path(d).expanduser().resolve()
+    if not p.is_dir(): raise ValueError(f"no such directory: {d}")
+    p = str(p)
+    cur = list_projects()
+    if p not in cur:
+        write_json(projects_path(), {"projects": cur + [p]})
+    return p
+
+def remove_project(d: str) -> str:
+    """Demote by directory (or by basename, since the tree only knows names).
+    Returns the removed path, empty when nothing went. The custom name and
+    icon go with it - details of a demoted project are not kept."""
+    cur = list_projects()
+    want = _norm_dir(d).lower()
+    gone = next((p for p in cur if p.lower() == want or Path(p).name.lower() == Path(want).name), "")
+    if gone:
+        data = read_json(projects_path())
+        data["projects"] = [p for p in cur if p != gone]
+        (data.get("names") or {}).pop(gone, None)
+        (data.get("icons") or {}).pop(gone, None)
+        write_json(projects_path(), data)
+    return gone
+
 def transcript(sid: str, turns: int = 12, cap: int = 6000) -> dict:
     """What was said in a past conversation, in text.
 
@@ -135,3 +254,30 @@ def delete(sid: str) -> bool:
     if not d.is_dir(): return False
     shutil.rmtree(d)
     return True
+
+
+def archive(sid: str) -> bool:
+    """Move a session out of the store into the archive: gone from every
+    listing, back by moving the folder in. The trash can, not the dump."""
+    d = path(sid)
+    if not d.is_dir(): return False
+    out = home() / "archive" / "sessions"
+    out.mkdir(parents=True, exist_ok=True)
+    try:
+        os.rename(d, out / safe_id(sid))
+    except OSError:
+        return False   # a folder of that id is already in the archive
+    return True
+
+def pin_session(sid: str, on: bool) -> str:
+    """Pin a conversation for the tree: a ts on the meta, order being oldest
+    pin first. Returns the ts, empty when unpinned. Not for the worker's own
+    open session - its commit() rewrites meta.json from memory, so a pin set
+    behind its back would be lost; callers pin that one through the Session."""
+    d = path(sid)
+    meta = read_json(d / "meta.json")
+    if not meta: raise ValueError(f"no session {sid!r}")
+    if on: meta["pinned"] = now_iso()
+    else: meta.pop("pinned", None)
+    write_json(d / "meta.json", meta)
+    return meta.get("pinned", "")
