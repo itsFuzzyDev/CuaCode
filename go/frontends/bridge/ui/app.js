@@ -15,7 +15,9 @@ const workspace = document.getElementById('workspace');
 const input  = document.getElementById('input');
 const tray   = document.getElementById('tray');
 const statusEl = document.getElementById('status');
-const tabsEl = document.getElementById('tabs');
+const treeEl = document.getElementById('tree');
+const sessname  = document.getElementById('sessname');
+const projectEl = document.getElementById('project');
 
 // --------------------------------------------------------------- the model
 
@@ -26,9 +28,11 @@ const tabsEl = document.getElementById('tabs');
 let sessions = {};
 let active   = null;
 let cur      = null;
+const closed = new Set();  // ids closed this window: their late batches are dropped, never resurrected
 
 let showThink = false;  // view prefs, shared across sessions
 let foldCalls = false;
+let PROJECT = '';       // the directory the app works on, off the first batch
 
 function newSession(id) {
   return {
@@ -40,6 +44,12 @@ function newSession(id) {
     callFail: 0,
     status: { State: 'idle' },
     runStart: 0,
+    lastAct: Date.now(),  // sidebar recency: a sent message or a finished run bumps it; streaming does not
+    storeId: null,        // set when this session loads an archived conversation
+    replaying: false,     // an archive replay is in flight: its history is not activity
+    wasBusy: false,       // last known busy state, for the finished-running edge
+    unseen: false,        // a run finished here and nobody has looked since
+    project: null,        // this session's own project, off its batches
     pending: [],
     pinned: true,  // stick to the bottom unless the user has scrolled away
     title: '',
@@ -70,59 +80,927 @@ function sessionFor(id) {
 // screen. Without the call the two sides drift the moment a tab is clicked, and
 // a message typed in one session goes to another's worker.
 function switchTo(id) {
+  // Already on screen: clicking its row again (or the palette's row) must
+  // not replay the feed's crossfade and yank the scroll to the bottom -
+  // that read as the session "refreshing" for no reason.
+  if (id === active) return;
   const s = sessionFor(id);
+  s.unseen = false;  // looking at it is the check
   active = id;
   cur = s;
   go('goSwitch', id);
+  // A switch - or the spawn that follows a "+ new session" click - is the
+  // user acting on the tree; the next rebuild may glide. A plain switch moves
+  // nothing, so this is usually a no-op.
+  sideMotion = true;
   for (const [sid, ss] of Object.entries(sessions)) {
     ss.feed.style.display = sid === id ? '' : 'none';
+    if (sid === id) {
+      // One fade per switch, replayed by resetting the animation - the stream
+      // itself is never animated, only the swap between conversations.
+      ss.feed.style.animation = 'none';
+      void ss.feed.offsetHeight;
+      ss.feed.style.animation = '';
+    }
   }
   setTitle(s.title);
-  drawTabs();
+  drawSidebar();
   drawStatus();
   drawTray();
   scrollToBottom();
 }
 
-// drawTabs renders the session switcher: one tab per open session, plus a "+"
-// to start another.
-function drawTabs() {
-  tabsEl.replaceChildren();
-  for (const [id, s] of Object.entries(sessions)) {
-    const tab = document.createElement('div');
-    tab.className = 'tab' + (id === active ? ' active' : '');
-    tab.title = id;
-    tab.addEventListener('click', () => switchTo(id));
-    tab.appendChild(span('', s.title || id));
-    const x = document.createElement('button');
-    x.className = 'tab-x';
-    x.textContent = '\u00d7';
-    x.title = 'close ' + id;
-    x.addEventListener('click', e => { e.stopPropagation(); closeSession(id); });
-    tab.appendChild(x);
-    tabsEl.appendChild(tab);
-  }
-  const add = document.createElement('button');
-  add.className = 'tab add';
-  add.textContent = '+';
-  add.title = 'new session';
-  add.addEventListener('click', addSession);
-  tabsEl.appendChild(add);
+// ------------------------------------------------------------- the sidebar
+
+// The sidebar is a tree: projects, and under each the sessions that belong to
+// it - the live ones this window spawned, then the store's archive. One row per
+// session: a dot (amber, breathing, while that session's worker is busy; green
+// when a run finished there and nobody has looked since), the title, and how
+// long ago the conversation last moved. Archive rows carry no dot.
+
+let storeList = [];           // the store's meta records, from session.list
+let promoted = [];            // dirs the user promoted to projects (project.list)
+let projNames = {};           // promoted dir -> custom display name (cosmetics; group key stays the basename)
+let projIcons = {};           // promoted dir -> one emoji, riding where the folder glyph would
+let storeSort = 'recent';     // sessions within each group: recency, or name
+const expanded = new Set();   // projects the user opened - every group starts closed
+const moreShown = new Map();  // project -> rows shown; 'Show more' pages it up by 5
+const pins = new Map();       // pinned session ids (store ids), ts; persisted on the meta via session.pin
+const projPins = new Map();   // pinned project names, in pin order; persisted in projects.json
+let pinSeq = 0;
+const SHOW_N = 6;
+const opened = new Map();     // project name -> dir, picked via folder+ before it has any sessions
+
+// The rail: the sidebar collapsed to its icons. Two sizes only - 268px out,
+// 76px in - and the user never resizes; the window forces the rail below
+// 800px, where the tree has no room to be a tree.
+const sideEl = document.querySelector('.side');
+let sideRail = false;         // the user's collapse, this window's own
+const narrowQ = matchMedia('(max-width: 800px)');
+const railOn = () => sideRail || narrowQ.matches;
+document.getElementById('sidetoggle').addEventListener('click', () => {
+  editingProj = null;  // collapsing takes the editor with it
+  sideRail = !sideRail;
+  sideMotion = true;
+  drawSidebar();
+});
+narrowQ.addEventListener('change', () => { editingProj = null; sideMotion = true; drawSidebar(); });
+
+// Tree motion: only the user's own actions animate the tree - what moved
+// glides in from where it was, what arrived fades in. Batch redraws never set
+// the flag, so streams, dots and titles never move anything, and ?demo&fast
+// keeps its deterministic screenshots.
+const NOMOTION = location.search.includes('fast');
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let sideMotion = false;       // set by interactive paths, consumed by the next rebuild
+let sideBorn = false;         // the first render is the tree's birth: no entrances on it
+
+const GRADS = 6;              // the editor's gradient circles; icon "grad:<n>", CSS .grad-<n>
+
+const ICONS = {
+  chev:   '<path d="M9 6l6 6-6 6"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 20h16"/>',
+  check:  '<path d="M4 12l5 5L20 7"/>',
+  cross:  '<path d="M6 6l12 12M18 6L6 18"/>',
+  folder: '<path d="M3 7c0-1.1.9-2 2-2h4l2 2h8c1.1 0 2 .9 2 2v9c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z"/>',
+  pin:    '<path d="M12 17v5M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.3V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.7a2 2 0 0 0-1.1-1.8l-1.8-.9a2 2 0 0 1-1.1-1.8V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>',
+  minus:  '<path d="M5 12h14"/>',
+  plus:   '<path d="M12 5v14M5 12h14"/>',
+  up:     '<path d="M18 15l-6-6-6 6"/>',
+  down:   '<path d="M6 9l6 6 6-6"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash:  '<path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6"/>',
+};
+
+function ic(name, cls) {
+  const s = document.createElement('span');
+  s.className = 'ic' + (cls ? ' ' + cls : '');
+  s.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS[name] + '</svg>';
+  return s;
 }
 
-// addSession asks Go for a fresh worker, then shows it.
-function addSession() {
-  const id = go('goNewSession');
+// ago renders a timestamp the way the mock says them: just now, 5m, 3h, 1d.
+function ago(iso) {
+  const t = typeof iso === 'number' ? iso : Date.parse(iso || '');
+  if (!t || isNaN(t)) return '';
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
+
+// projName is the project a store record belongs to: the basename of the
+// directory it was launched from, which is what a project is (project >
+// sessions). Records with no cwd land in one group at the end.
+function projName(cwd) {
+  if (!cwd) return 'no project';
+  const base = cwd.replace(/\/+$/, '').split('/').pop();
+  return base || 'no project';
+}
+
+// A promoted project can carry a custom display name and a one-emoji icon
+// (projects.json, via project.rename). The group key never changes - the
+// basename is what sessions, pins and scopes match on - these only change
+// what renders.
+function projDirOf(name) {
+  const d = promoted.find(x => projName(x) === name);
+  if (d) return d;
+  // Not promoted: the current project's group still resolves a dir off the
+  // store's records, so the launch repo is as editable as any promoted one.
+  const m = storeList.find(x => x.cwd && projName(x.cwd) === name);
+  return (m && m.cwd) || '';
+}
+function displayNameOf(name) { const d = projDirOf(name); return (d && projNames[d]) || name; }
+function iconOf(name) { const d = projDirOf(name); return (d && projIcons[d]) || ''; }
+
+// The head's / rail's folder glyph for a project's icon: a gradient circle
+// ("grad:n"), an uploaded image ("img:data:..."), one emoji, or the plain
+// folder when there is none.
+function iconNode(name) {
+  const icon = iconOf(name);
+  if (icon.startsWith('img:')) {
+    const i = document.createElement('img');
+    i.className = 'projicon-img';
+    i.src = icon.slice(4);
+    i.alt = '';
+    return i;
+  }
+  if (icon.startsWith('grad:')) return span('projicon-grad grad-' + icon.slice(5), '');
+  return icon ? span('projicon', icon) : ic('folder');
+}
+
+// drawSidebar renders the tree. It rebuilds rather than diffs - the tree is a
+// few dozen rows - but apply() calls it once per batch and a stream is batches
+// per frame, so a signature guards the rebuild: nothing moves while a batch
+// only carried text.
+let sideSig = '';
+let editingProj = null;       // the group whose details are being edited; the tree freezes around it
+let editMounted = false;      // the editor is on screen; redraws must not steal its focus
+let editName = '', editIcon = '';
+function drawSidebar() {
+  const live = Object.entries(sessions).map(([id, s]) =>
+    id + ':' + (s.title || '') + ':' + (BUSY.has(s.status.State) ? 1 : 0) + ':' + (s.storeId || '') + ':' + (s.unseen ? 1 : 0) + ':' + (s.project || '') + ':' + (s.lastAct || ''));
+  const sig = active + '|' + live.join() + '|' + PROJECT + '|' + storeSort +
+    '|' + [...expanded].join() + '|' + [...moreShown].join() + '|' + [...pins.keys()].join() + '|' +
+    storeList.map(m => m.id + '\u0001' + (m.title || '') + '\u0001' + (m.updated || '')).join('\u0002') +
+    '|' + [...opened].join() + '|' + [...projPins.keys()].join() + '|' + promoted.join('\u0002') +
+    '|' + (railOn() ? 1 : 0) + '|' + (editingProj || '') +
+    '|' + JSON.stringify(projNames) + JSON.stringify(projIcons);
+  if (sig === sideSig) return;
+  sideSig = sig;
+
+  // Merge: one row per session. A store row whose conversation is already
+  // loaded into a live session yields to it - the live row is the same
+  // conversation with the running dot on it.
+  const loaded = new Set(Object.values(sessions).map(s => s.storeId).filter(Boolean));
+  const groups = new Map();
+  const add = (proj, row) => {
+    if (!groups.has(proj)) groups.set(proj, []);
+    groups.get(proj).push(row);
+  };
+  for (const [id, s] of Object.entries(sessions)) {
+    add(s.project || PROJECT || 'no project', {
+      id, live: true,
+      pk: s.storeId || id,  // the pin key: the store id is what persists
+      title: s.title || 'New session',
+      t: s.lastAct || 0,
+      busy: BUSY.has(s.status.State),
+      unseen: s.unseen,
+    });
+  }
+  // A project group is the current cwd's, one holding a live session, or one
+  // the user promoted (plus the beat before a fresh pick's promotion lands).
+  // Every other directory - the demo folder, the one-off - stays out of the
+  // tree; the palette still finds all of its sessions by name.
+  const promotedNames = new Set(promoted.map(projName));
+  const want = proj => proj === PROJECT || promotedNames.has(proj) || opened.has(proj);
+  for (const m of storeList) {
+    if (loaded.has(m.id)) continue;
+    const proj = projName(m.cwd);
+    if (!want(proj) && !groups.has(proj)) continue;  // a live session's group always shows
+    add(proj, {
+      id: m.id, live: false,
+      pk: m.id,
+      title: m.title || 'New session',
+      t: Date.parse(m.updated || '') || 0,
+    });
+  }
+  for (const [name] of opened) {
+    if (!groups.has(name)) groups.set(name, []);
+  }
+
+  const projs = [...groups.keys()];
+  // The groups hold their places - the tree must not reshuffle as sessions
+  // open and age. Pinned projects first, in pin order; then the project the
+  // window is working in; then the promoted ones in promotion order
+  // (projects.json); then whatever else (live-only groups, no-project)
+  // alphabetically. The sort toggle orders the sessions inside each group,
+  // never the groups themselves.
+  const promotedIndex = name => promoted.findIndex(d => projName(d) === name);
+  projs.sort((a, b) => {
+    const pa = projPins.has(a), pb = projPins.has(b);
+    if (pa !== pb) return pa ? -1 : 1;
+    if (pa) return projPins.get(a) - projPins.get(b);
+    if (a === PROJECT) return -1;
+    if (b === PROJECT) return 1;
+    const ia = promotedIndex(a), ib = promotedIndex(b);
+    if ((ia >= 0) !== (ib >= 0)) return ia >= 0 ? -1 : 1;
+    if (ia >= 0) return ia - ib;
+    return a.localeCompare(b);
+  });
+
+  // Motion setup, before the old tree is discarded: remember where everything
+  // stood so what moved can glide in from there. Interactive rebuilds only.
+  const animate = sideMotion && !REDUCED && !NOMOTION;
+  sideMotion = false;
+  const oldTops = new Map();
+  if (animate) {
+    for (const el of treeEl.children) oldTops.set(el.dataset.key || '', el.offsetTop);
+  }
+  const enter = animate && sideBorn;
+  sideBorn = true;
+
+  treeEl.replaceChildren();
+  sideEl.classList.toggle('rail', railOn());
+  if (railOn()) {
+    // The rail: one folder glyph per project, its news dot riding it - the
+    // tree's shape, not its rows. No titles, no pins, no pager; the order is
+    // the tree's own (pins first), so the rail never lies about what sits on
+    // top. A custom name or emoji renders here too. A click opens the
+    // sidebar on that project.
+    for (const proj of projs) {
+      const rows = groups.get(proj);
+      const b = document.createElement('button');
+      b.className = 'railrow' + (rows.some(r => r.live && r.id === active) ? ' cur' : '');
+      b.title = displayNameOf(proj);
+      b.appendChild(iconNode(proj));
+      const busy = rows.some(r => r.busy);
+      if (busy || rows.some(r => r.unseen)) b.appendChild(span('dot' + (busy ? ' busy' : ''), ''));
+      b.addEventListener('click', () => {
+        sideRail = false;  // opening a project is the point of the click
+        expanded.add(proj);
+        sideMotion = true;
+        drawSidebar();
+        for (const h of treeEl.querySelectorAll('.projhead')) {
+          if (h.dataset.key === 'p:' + proj) { h.scrollIntoView({ block: 'nearest' }); break; }
+        }
+      });
+      treeEl.appendChild(b);
+    }
+    return;
+  }
+  // The details editor freezes the tree: nothing rebuilds under the user's
+  // keystrokes until Enter commits (project.rename; the reply re-stamps) or
+  // Esc puts the tree back. Streaming batches wait their beat.
+  if (editingProj) {
+    if (!editMounted) {
+      editMounted = true;
+      const box = document.createElement('div');
+      box.className = 'projedit';
+      const ie = document.createElement('input');
+      ie.className = 'pe-icon';
+      // Only a literal emoji prefills the field - a gradient or an upload is
+      // shown by its selected swatch, never as raw text like "grad:2" sitting
+      // where an icon belongs.
+      ie.value = editIcon.startsWith('grad:') || editIcon.startsWith('img:') ? '' : editIcon;
+      ie.maxLength = 8;
+      ie.spellcheck = false;
+      ie.placeholder = '\ud83d\ude80';
+      ie.title = 'one emoji, or pick an icon below';
+      const ne = document.createElement('input');
+      ne.className = 'pe-name';
+      ne.value = editName;
+      ne.maxLength = 60;
+      ne.placeholder = editingProj;
+      ne.spellcheck = false;
+      // The icon strip: a default-folder reset, six gradient circles, then
+      // upload for your own image. A circle, an emoji and an upload are
+      // exclusive - picking one clears the others.
+      const strip = document.createElement('div');
+      strip.className = 'pe-swatches';
+      const markSel = () => { for (const b of strip.children) b.classList.toggle('sel', !!b.dataset.icon && b.dataset.icon === editIcon); };
+      const none = document.createElement('button');
+      none.className = 'pe-sw pe-none';
+      none.dataset.icon = '';
+      none.title = 'default folder';
+      none.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.folder + '</svg>';
+      none.addEventListener('click', () => {
+        editIcon = '';
+        ie.value = '';
+        markSel();
+      });
+      strip.appendChild(none);
+      for (let g = 1; g <= GRADS; g++) {
+        const s = document.createElement('button');
+        s.className = 'pe-sw grad-' + g;
+        s.dataset.icon = 'grad:' + g;
+        s.title = 'gradient ' + g;
+        s.addEventListener('click', () => {
+          editIcon = editIcon === s.dataset.icon ? '' : s.dataset.icon;
+          ie.value = '';
+          markSel();
+        });
+        strip.appendChild(s);
+      }
+      const up = document.createElement('button');
+      up.className = 'pe-up';
+      up.title = 'use your own image (png / jpg / webp / gif)';
+      up.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.upload + '</svg>';
+      up.addEventListener('click', () => {
+        const raw = go('goPickIcon');
+        if (!raw) return;
+        let f;
+        try { f = JSON.parse(raw); } catch { return; }
+        if (!f || !f.b64) return;
+        const img = new Image();
+        img.onload = () => {
+          // Cover-crop into a 64px canvas: the store caps icon payloads, and
+          // 64px is far more than a 16px glyph will ever show.
+          const c = document.createElement('canvas');
+          c.width = c.height = 64;
+          const ctx = c.getContext('2d');
+          const side = Math.min(img.width, img.height);
+          ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 64, 64);
+          const url = c.toDataURL('image/png');
+          editIcon = 'img:' + url;
+          up.style.backgroundImage = 'url(' + url + ')';
+          ie.value = '';
+          markSel();
+        };
+        img.src = 'data:' + (f.mime || 'image/png') + ';base64,' + f.b64;
+      });
+      strip.appendChild(up);
+      ie.addEventListener('input', () => { editIcon = ie.value; strip.querySelectorAll('.sel').forEach(b => b.classList.remove('sel')); });
+      ne.addEventListener('input', () => { editName = ne.value; });
+      const commit = () => {
+        const d = projDirOf(editingProj || '');
+        editingProj = null;
+        editMounted = false;
+        go('goCommand', 'project.rename', { dir: d, name: editName.trim(), icon: editIcon.trim() });
+        sideMotion = true;
+        drawSidebar();  // drops the editor at once; the reply re-stamps
+      };
+      const cancel = () => { editingProj = null; editMounted = false; drawSidebar(); };
+      // Save and cancel as buttons: Enter and Esc work from anywhere in the
+      // editor (below), but nobody should have to know that - the way out is
+      // on the screen, in both colors.
+      const save = document.createElement('button');
+      save.className = 'pe-save';
+      save.title = 'save';
+      save.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.check + '</svg>';
+      save.addEventListener('click', e => { e.stopPropagation(); commit(); });
+      const drop = document.createElement('button');
+      drop.className = 'pe-drop';
+      drop.title = 'cancel';
+      drop.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.cross + '</svg>';
+      drop.addEventListener('click', e => { e.stopPropagation(); cancel(); });
+      // Enter and Esc belong to the whole editor, not to whichever input
+      // holds focus - a focused swatch ate Enter as a click, and Esc did
+      // nothing at all. Bound on the box, they win over the swatch default.
+      box.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancel(); }
+      });
+      box.appendChild(ie);
+      box.appendChild(ne);
+      box.appendChild(save);
+      box.appendChild(drop);
+      box.appendChild(strip);
+      markSel();
+      treeEl.appendChild(box);
+      ne.focus();
+    }
+    return;
+  }
+  editMounted = false;
+  for (const proj of projs) {
+    const rows = groups.get(proj).slice().sort((a, b) => {
+      // Pinned sessions float above the rest of their project, oldest pin
+      // first (the value is the pin's ts). The sort toggle orders the rest of
+      // the group: recency, or name. The groups themselves never move.
+      const pa = pins.has(a.pk), pb = pins.has(b.pk);
+      if (pa !== pb) return pa ? -1 : 1;
+      if (pa) return (pins.get(a.pk) || 0) - (pins.get(b.pk) || 0);
+      if (storeSort === 'name') return (a.title || '').localeCompare(b.title || '');
+      return b.t - a.t;
+    });
+    const open = expanded.has(proj);
+    const head = document.createElement('div');
+    head.className = 'projhead' + (open ? ' open' : '');
+    head.title = proj;
+    head.dataset.key = 'p:' + proj;
+    head.appendChild(ic('chev', 'chev'));
+    head.appendChild(iconNode(proj));
+    head.appendChild(span('projname', displayNameOf(proj)));
+    // A closed group still owes the user its news: the dot is a notification,
+    // so a busy or unseen session inside one lifts its dot to the head.
+    // Amber (running) wins over green (finished, unseen).
+    if (!open) {
+      const busy = rows.some(r => r.busy);
+      if (busy || rows.some(r => r.unseen)) head.appendChild(span('dot' + (busy ? ' busy' : ''), ''));
+    }
+    // The head's tools, packed as one cluster riding the right end - not one
+    // absolute slot per button, or the subset a group actually has leaves
+    // holes between the icons. Left to right: move, edit, demote, pin (the
+    // pin rides closest to the edge); tools that don't apply are absent.
+    const tools = document.createElement('span');
+    tools.className = 'projhead-tools';
+    const pdir = promoted.find(d => projName(d) === proj) || '';
+    const edir = pdir || (proj === PROJECT ? projDirOf(proj) : '');
+    // New session in this project: the fastest path there is - hover the
+    // group, hit +, and the session spawns in the group's own directory. No
+    // palette, no folder hunt.
+    if (edir) {
+      const nb = document.createElement('button');
+      nb.className = 'projhead-new';
+      nb.title = 'new session in ' + displayNameOf(proj);
+      nb.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.plus + '</svg>';
+      nb.addEventListener('click', e => {
+        e.stopPropagation();
+        expanded.add(proj);
+        sideMotion = true;
+        go('goNewSession', edir).then(id => { if (id) switchTo(id); });
+      });
+      tools.appendChild(nb);
+    }
+    if (pdir || projPins.has(proj)) for (const [delta, ttl] of [[-1, 'move up'], [1, 'move down']]) {
+      // One slot up/down within the section the group sits in - pin order for
+      // pinned groups, promotion order otherwise. The reply re-stamps both
+      // lists; the tree's order is explicit state, moved by explicit
+      // commands, never a drag.
+      const b = document.createElement('button');
+      b.className = 'projhead-mv';
+      b.title = ttl;
+      b.innerHTML = '<svg viewBox="0 0 24 24">' + (delta < 0 ? ICONS.up : ICONS.down) + '</svg>';
+      b.addEventListener('click', e => {
+        e.stopPropagation();
+        go('goCommand', 'project.move', { name: proj, dir: pdir, delta });
+        sideMotion = true;  // the reply redraws the moved pair
+      });
+      tools.appendChild(b);
+    }
+    if (edir) {
+      const ed = document.createElement('button');
+      ed.className = 'projhead-edit';
+      ed.title = 'edit name \u0026 icon';
+      ed.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.pencil + '</svg>';
+      ed.addEventListener('click', e => {
+        e.stopPropagation();
+        editingProj = proj;
+        editName = projNames[edir] || '';
+        editIcon = projIcons[edir] || '';
+        editMounted = false;
+        drawSidebar();
+      });
+      tools.appendChild(ed);
+    }
+    if (pdir) {
+      // Demote: the minus is the promotion's undo. Only a promoted group
+      // carries one - the current cwd's group and live sessions' groups stay
+      // in the tree regardless.
+      const rm = document.createElement('button');
+      rm.className = 'projhead-rm';
+      rm.title = 'remove ' + proj + ' from projects';
+      rm.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.minus + '</svg>';
+      rm.addEventListener('click', e => {
+        e.stopPropagation();
+        sideMotion = true;  // the removal is the user's own action; the reply redraws
+        go('goCommand', 'project.remove', { dir: pdir });
+      });
+      tools.appendChild(rm);
+    }
+    // The project pin: this window's ordering, persisted with the projects.
+    const pp = document.createElement('button');
+    pp.className = 'projhead-pin' + (projPins.has(proj) ? ' on' : '');
+    pp.title = projPins.has(proj) ? 'unpin project' : 'pin project';
+    pp.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.pin + '</svg>';
+    pp.addEventListener('click', e => {
+      e.stopPropagation();
+      if (projPins.has(proj)) projPins.delete(proj);
+      else projPins.set(proj, ++pinSeq);
+      go('goCommand', 'project.pin', { name: proj, on: projPins.has(proj) });  // the reply re-stamps it
+      sideMotion = true;
+      drawSidebar();
+    });
+    tools.appendChild(pp);
+    head.appendChild(tools);
+    head.addEventListener('click', () => {
+      if (expanded.has(proj)) { expanded.delete(proj); moreShown.delete(proj); }  // a reopen starts at SHOW_N again
+      else expanded.add(proj);
+      sideMotion = true;
+      drawSidebar();
+    });
+    treeEl.appendChild(head);
+    if (!open) continue;
+
+    const n = moreShown.get(proj) || SHOW_N;
+    const shown = rows.slice(0, n);
+    for (const r of shown) {
+      const row = document.createElement('div');
+      row.className = 'srow' + (r.live && r.id === active ? ' sel' : '');
+      row.title = r.title;
+      row.dataset.key = 's:' + r.id;
+      // Dot = notification. Amber while that session's worker runs; green
+      // when a run finished in it and it has not been opened since; nothing
+      // otherwise, with the spacer keeping titles aligned across rows.
+      row.appendChild(span('dot' + (r.busy ? ' busy' : r.unseen ? '' : ' off'), ''));
+      row.appendChild(span('srow-title', r.title));
+      row.appendChild(span('when', ago(r.t)));
+      // Pin: persisted with the conversation (a ts on the meta), riding over
+      // the time's right end; a set pin stays visible - state, not affordance.
+      // Pinned rows sit above their project's Show more cut, so a pin is
+      // always visible.
+      const p = document.createElement('button');
+      p.className = 'srow-pin' + (pins.has(r.pk) ? ' on' : '');
+      p.title = pins.has(r.pk) ? 'unpin' : 'pin to top';
+      p.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.pin + '</svg>';
+      p.addEventListener('click', e => {
+        e.stopPropagation();
+        if (pins.has(r.pk)) pins.delete(r.pk);
+        else pins.set(r.pk, Date.now());
+        go('goCommand', 'session.pin', { id: r.pk, on: pins.has(r.pk) });  // the reply re-stamps
+        sideMotion = true;
+        drawSidebar();
+      });
+      row.appendChild(p);
+      if (r.live) {
+        const x = document.createElement('button');
+        x.className = 'srow-x';
+        x.textContent = '\u00d7';
+        x.title = 'close ' + r.title;
+        x.addEventListener('click', e => { e.stopPropagation(); closeSession(r.id); });
+        row.appendChild(x);
+      } else {
+        // The trash can: out of the tree, not out of the world - the folder
+        // moves to the store's archive and comes back by moving it in.
+        const t = document.createElement('button');
+        t.className = 'srow-trash';
+        t.title = 'archive ' + r.title;
+        t.innerHTML = '<svg viewBox="0 0 24 24">' + ICONS.trash + '</svg>';
+        t.addEventListener('click', e => {
+          e.stopPropagation();
+          t.disabled = true;
+          go('goCommand', 'session.archive', { id: r.id });
+          go('goCommand', 'session.list', null);  // the row leaves when the fresh list lands
+        });
+        row.appendChild(t);
+      }
+      row.addEventListener('click', () => {
+        if (r.live) switchTo(r.id);
+        else if (!BUSY.has(sessions[active].status.State)) loadStore(r.id);
+        // An archive click while the worker is mid-run waits for nothing: the
+        // load would swap the conversation out from under the run, so it is
+        // ignored until the run is done or cancelled.
+      });
+      treeEl.appendChild(row);
+    }
+    if (!rows.length) {
+      // A picked project with nothing in it yet: one row, and it starts the
+      // first session in the folder the project was picked from.
+      const n = document.createElement('button');
+      n.className = 'srow newrow';
+      n.dataset.key = 'n:' + proj;
+      n.appendChild(span('dot off', ''));
+      n.appendChild(span('srow-title', '+ new session'));
+      n.addEventListener('click', () => {
+        // One spawn per row: the placeholder lives until the new session's
+        // first batch replaces it, and a second click would double-spawn.
+        if (n.disabled) return;
+        n.disabled = true;
+        go('goNewSession', opened.get(proj) || '').then(id => { if (id) switchTo(id); });
+      });
+      treeEl.appendChild(n);
+    }
+    if (rows.length > SHOW_N) {
+      // Paged: 'Show more' adds five a click while rows remain hidden; once
+      // everything is shown it becomes 'Show less', the way back to the first
+      // SHOW_N. Collapsing the group resets the pager too.
+      const less = n >= rows.length;
+      const m = document.createElement('button');
+      m.className = 'showmore';
+      m.dataset.key = 'm:' + proj;
+      m.textContent = less ? 'Show less' : 'Show more';
+      m.addEventListener('click', () => {
+        less ? moreShown.delete(proj) : moreShown.set(proj, n + 5);
+        sideMotion = true;
+        drawSidebar();
+      });
+      treeEl.appendChild(m);
+    }
+  }
+
+  // The motion pass: what moved glides from where it was, what arrived fades
+  // in, staggered like the palette's rows. Everything runs on CSS animations
+  // that clean up after themselves - no inline styles outlive the element.
+  if (animate) {
+    let ni = 0;
+    for (const el of treeEl.children) {
+      const was = oldTops.get(el.dataset.key || '');
+      if (was !== undefined) {
+        const d = was - el.offsetTop;
+        if (d) {
+          el.style.setProperty('--flip', d + 'px');
+          el.classList.add('flip');
+        }
+      } else if (enter) {
+        el.style.animationDelay = Math.min(ni++ * 18, 110) + 'ms';
+        el.classList.add('enter');
+      }
+    }
+  }
+}
+
+// revealProject opens a picked directory in the tree without spawning
+// anything: its group expands and scrolls into view, and until a session
+// exists there the group carries one "+ new session" row. Exact-dir matching
+// only - a session spawned in a subdirectory groups under that basename.
+function revealProject(dir) {
+  const name = projName(dir);
+  opened.set(name, dir);
+  expanded.add(name);
+  sideMotion = true;
+  drawSidebar();
+  for (const h of treeEl.querySelectorAll('.projhead')) {
+    if (h.dataset.key === 'p:' + name) {
+      h.scrollIntoView({ block: 'nearest' });
+      break;
+    }
+  }
+}
+
+// loadStore opens an archived conversation in the active session's worker: the
+// feed resets and the history replays into it, the same path --resume takes.
+// goLoad sets the pump's loading flag first, so the replay announces itself as
+// a resume rather than a new conversation.
+function loadStore(id) {
+  go('goLoad', id);
+}
+
+// The header icons: sort flips projects between recency and name, + opens the
+// palette, and folder+ promotes a folder into the tree without spawning
+// anything.
+document.getElementById('projadd').addEventListener('click', () => {
+  go('goPickFolder').then(dir => {
+    if (!dir) return;
+    // Picking a folder promotes it: the tree's whitelist is explicit, and
+    // this is the user saying so. revealProject renders the beat before the
+    // promotion reply lands.
+    go('goCommand', 'project.add', { dir });
+    revealProject(dir);
+    // The boot list may predate sessions saved at this cwd since - by another
+    // window, another frontend, or this one elsewhere. One command on a user
+    // action, so the no-idle-work rule holds; the tree renders the folder's
+    // history newest-first the moment it lands.
+    go('goCommand', 'session.list', null);
+  });
+});
+document.getElementById('projsort').addEventListener('click', () => {
+  storeSort = storeSort === 'recent' ? 'name' : 'recent';
+  drawSidebar();
+});
+document.getElementById('projnew').addEventListener('click', palOpen);
+document.getElementById('search').addEventListener('click', palOpen);
+
+// ------------------------------------------------------------- the palette
+
+// One surface over everything. It finds sessions across every project (live
+// ones first), starts a new session in any project the store knows or in a
+// folder picked on the spot, and lists the settings - placeholders until a
+// settings surface exists, but searchable from day one. `#name` scopes every
+// row to one project. DOM only; webview_go has no menus to hang it from.
+const veil  = document.getElementById('veil');
+const pq    = document.getElementById('pq');
+const prows = document.getElementById('prows');
+let palRows = [];  // the list, in order; palSel indexes into it
+let palSel  = 0;
+let palFreshT = 0;  // the entrance stagger's timer
+let palCloseT = 0;  // the close fade's timer
+
+function palOpen() {
+  veil.classList.remove('closing');
+  veil.hidden = false;
+  // Every open is a fresh look at the store: sessions saved by other
+  // frontends - or by this one elsewhere - show up without a restart. One
+  // command per open, on a user action, so the no-idle-work rule holds; the
+  // project list rides along, since the actions section curates from it.
+  go('goCommand', 'session.list', null);
+  go('goCommand', 'project.list', null);
+  pq.value = '';
+  palSel = 0;
+  // The fresh class gives the rows their one staggered entrance; gone in a
+  // beat, so typing filters the list without replaying it.
+  prows.classList.add('fresh');
+  clearTimeout(palFreshT);
+  palFreshT = setTimeout(() => prows.classList.remove('fresh'), 400);
+  palDraw();
+  pq.focus();
+}
+
+function palClose() {
+  if (veil.hidden) return;
+  veil.classList.add('closing');
+  input.focus();
+  clearTimeout(palCloseT);
+  palCloseT = setTimeout(() => {
+    veil.hidden = true;
+    veil.classList.remove('closing');
+  }, 90);
+}
+
+function palToggle() { veil.hidden ? palOpen() : palClose(); }
+
+// palRowsFor builds the menu for a query: an ordered list of sections, each
+// rendering only when it has rows. The order is the menu's grammar - actions
+// first, because they answer "do something" and never depend on recency;
+// sessions second, ranked by true recency; settings last, and only when a
+// query names them. New surfaces slot into the list as they exist.
+function palRowsFor(q) {
+  q = q.trim();
+  let scope = '';
+  const m = q.match(/^#(\S*)\s*(.*)$/);
+  if (m) { scope = m[1].toLowerCase(); q = m[2]; }
+  const ql = q.toLowerCase();
+  const inScope = p => !scope || (p || '').toLowerCase().startsWith(scope);
+
+  const rows = [];
+  for (const [id, s] of Object.entries(sessions)) {
+    const title = s.title || 'New session';
+    const base = s.project || PROJECT;
+    const proj = displayNameOf(base);
+    if ((inScope(proj) || inScope(base)) && (!ql || title.toLowerCase().includes(ql) || proj.toLowerCase().includes(ql) || base.toLowerCase().includes(ql)))
+      rows.push({ kind: 'session', id, live: true, title, proj, t: s.lastAct || 0, busy: BUSY.has(s.status.State) });
+  }
+  // A store record whose conversation is already live in this window yields
+  // to the live row - same conversation, same store id (stamped off the
+  // worker's ready line, or off a load).
+  const loaded = new Set(Object.values(sessions).map(s => s.storeId).filter(Boolean));
+  for (const r of storeList) {
+    if (loaded.has(r.id)) continue;
+    const title = r.title || 'New session';
+    const base = projName(r.cwd);
+    const proj = displayNameOf(base);
+    if ((inScope(proj) || inScope(base)) && (!ql || title.toLowerCase().includes(ql) || proj.toLowerCase().includes(ql) || base.toLowerCase().includes(ql)))
+      rows.push({ kind: 'session', id: r.id, live: false, title, proj, t: Date.parse(r.updated || '') || 0 });
+  }
+  rows.sort((a, b) => b.t - a.t);
+
+  // Projects a new session can start in, listed on a BARE open - the menu's
+  // whole point is launching without a scavenger hunt: the current project
+  // first (empty dir - Go fills it in), then the promoted ones in promotion
+  // order, each with its icon. Not every cwd the store ever saw - a directory
+  // becomes a project by promotion, and the picked-folder row below is how a
+  // new one is born. Typing or #scoping narrows the same list; the cap keeps
+  // a long promotion list from pushing the sessions off the menu.
+  const acts = [];
+  const projs = new Map(PROJECT ? [[PROJECT, '']] : []);
+  for (const d of promoted) {
+    if (!projs.has(projName(d))) projs.set(projName(d), d);
+  }
+  for (const [name, dir] of projs) {
+    const disp = displayNameOf(name);
+    if ((!scope || inScope(disp) || inScope(name)) && (!ql || disp.toLowerCase().includes(ql) || name.toLowerCase().includes(ql)))
+      acts.push({ kind: 'new', name, dir, title: 'New session in ' + disp });
+  }
+  if (acts.length > 8) acts.length = 8;
+  if (!scope && acts.length < 8 && (!ql || 'picked folder'.includes(ql)))
+    acts.push({ kind: 'pick', title: 'New session in a picked folder\u2026' });
+
+  const soon = [];
+  for (const s of ['General', 'Providers', 'Models', 'Default effort', 'Appearance']) {
+    if (ql && s.toLowerCase().includes(ql)) soon.push({ kind: 'soon', title: s });
+  }
+  return [
+    { label: 'Actions', rows: acts },
+    { label: 'Sessions', rows: rows.slice(0, 8) },
+    { label: 'Settings', rows: soon },
+  ].filter(s => s.rows.length);
+}
+
+function palDraw() {
+  palRows = [];
+  prows.replaceChildren();
+
+  const push = r => {
+    r.idx = palRows.length;
+    palRows.push(r);
+    prows.appendChild(palRowEl(r));
+  };
+  for (const s of palRowsFor(pq.value)) {
+    const h = document.createElement('div');
+    h.className = 'p-head';
+    h.textContent = s.label;
+    prows.appendChild(h);
+    s.rows.forEach(push);
+  }
+  if (!palRows.length) {
+    const e = document.createElement('div');
+    e.className = 'p-empty';
+    e.textContent = 'nothing matches';
+    prows.appendChild(e);
+  }
+
+  if (palSel >= palRows.length) palSel = Math.max(0, palRows.length - 1);
+  palMark();
+}
+
+function palRowEl(r) {
+  const el = document.createElement('div');
+  el.className = 'p-row' + (r.kind === 'soon' ? ' soon' : '');
+  el.dataset.idx = r.idx;
+  if (r.kind === 'session') {
+    el.appendChild(span('dot' + (r.busy ? ' busy' : ' off'), ''));
+    el.appendChild(span('p-title', r.title));
+    el.appendChild(span('p-meta', r.proj + (r.t ? ' \u00b7 ' + ago(r.t) : '')));
+  } else if (r.kind === 'soon') {
+    el.appendChild(span('p-glyph', '\u2699'));
+    el.appendChild(span('p-title', r.title));
+    el.appendChild(span('p-soon', 'soon'));
+  } else if (r.kind === 'pick') {
+    el.appendChild(span('p-glyph', '+'));
+    el.appendChild(span('p-title', r.title));
+  } else {
+    // A project action: the project's own icon when it has one, else the +.
+    const icon = iconOf(r.name || '');
+    if (icon) {
+      const g = span('p-glyph', '');
+      g.appendChild(iconNode(r.name));
+      el.appendChild(g);
+    } else el.appendChild(span('p-glyph', '+'));
+    el.appendChild(span('p-title', r.title));
+  }
+  el.addEventListener('click', () => palGo(r));
+  return el;
+}
+
+function palMark() {
+  for (const el of prows.querySelectorAll('.p-row')) {
+    const on = Number(el.dataset.idx) === palSel;
+    el.classList.toggle('sel', on);
+    if (on) el.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function palGo(r) {
+  palClose();
+  if (r.kind === 'session') {
+    if (r.live) switchTo(r.id);
+    else if (!BUSY.has(sessions[active].status.State)) loadStore(r.id);
+  } else if (r.kind === 'new') {
+    expanded.add(r.dir ? projName(r.dir) : PROJECT);  // spawning into a group opens it
+    go('goNewSession', r.dir).then(id => { if (id) switchTo(id); });
+  } else if (r.kind === 'pick') {
+    go('goPickFolder').then(dir => {
+      if (!dir) return;
+      // Picking a folder is how a project is born: promote it, then spawn.
+      go('goCommand', 'project.add', { dir });
+      expanded.add(projName(dir));
+      go('goNewSession', dir).then(id => { if (id) switchTo(id); });
+    });
+  }
+  // kind 'soon': the settings surface does not exist yet; the row only reads.
+}
+
+pq.addEventListener('input', () => { palSel = 0; palDraw(); });
+pq.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); palSel = Math.min(palRows.length - 1, palSel + 1); palMark(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); palSel = Math.max(0, palSel - 1); palMark(); }
+  else if (e.key === 'Enter') { e.preventDefault(); if (palRows[palSel]) palGo(palRows[palSel]); }
+  else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); palClose(); }
+});
+veil.addEventListener('mousedown', e => { if (e.target === veil) palClose(); });
+
+// drawHeader fills the navbar: which session is on screen, and what it works
+// on. Every title change goes through setTitle, so the name is filled there;
+// the project arrives on a batch and is app-constant for now.
+function drawHeader() {
+  sessname.textContent = cur.title || 'New session';
+  sessname.classList.toggle('empty', !cur.title);
+  const proj = (cur && cur.project) || PROJECT;
+  projectEl.hidden = !proj;
+  projectEl.textContent = proj ? displayNameOf(proj) : '';
+}
+
+// addSession asks Go for a fresh worker, then shows it. Webview bindings
+// answer with a promise rather than a value, so the id is awaited: a promise
+// object itself is truthy and would switch to a session that does not exist.
+async function addSession() {
+  // Empty dir: the launch directory. The palette passes its own.
+  const id = await go('goNewSession', '');
   if (!id) return;
   switchTo(id);
 }
 
 // closeSession closes a session on the Go side and drops its feed, then shows
-// whatever is left (or starts a fresh one if the last went).
-function closeSession(id) {
-  const next = go('goClose', id);
+// whatever is left (or starts a fresh one if the last went). Same promise
+// rule: the next active id is the resolution of the close, never the close
+// itself - switching to a promise would leave Go's workspace empty and the
+// next sent message would walk into a nil session.
+async function closeSession(id) {
+  const next = await go('goClose', id);
   const s = sessions[id];
   if (s) { s.feed.remove(); delete sessions[id]; }
+  closed.add(id);
   if (next) switchTo(next);
   else if (Object.keys(sessions).length) switchTo(Object.keys(sessions)[0]);
   else addSession();
@@ -172,17 +1050,49 @@ function apply() {
   queued = [];
 
   for (const b of batches) {
+    // A worker being closed flushes once more on the way down; a batch for a
+    // closed id would make sessionFor resurrect its feed and its sidebar row.
+    if (b.session && closed.has(b.session)) continue;
     // Each batch belongs to one session; fold it there, then put the active
     // session back before drawing, so the bar always reads the one on screen.
     const s = sessionFor(b.session);
     const prev = cur;
     cur = s;
     s.status = b.status;
+    // The row dot is a notification, not a state label: it lights when a run
+    // finishes in a session nobody is looking at, and goes out when the
+    // session is opened. A running session shows amber instead. The same edge
+    // is the session's last activity - a finished run counts, streaming does
+    // not, or the sidebar reshuffles every time the model breathes.
+    const busy = BUSY.has(s.status.State);
+    if (busy) {
+      s.unseen = false;
+    } else if (s.wasBusy) {
+      s.unseen = s.id !== active;
+      if (!s.replaying) s.lastAct = Date.now();  // a replay ending is not activity either
+    }
+    s.wasBusy = busy;
+    // Each session carries its own project off its batches - spawned-in or
+    // loaded-from, they can differ inside one window. PROJECT stays as the
+    // launch project: the palette's "here", and the demo's paint. The header
+    // is drawn once below, for the session on screen: per batch it was drawn
+    // with cur pointed at a background session, and the navbar flickered to
+    // whichever conversation was streaming in the background.
+    if (b.project) {
+      s.project = b.project;
+      if (!PROJECT) { PROJECT = b.project; expanded.add(b.project); }  // the current cwd starts open
+    }
     for (const ev of b.events) fold(ev, b.loading);
     cur = prev;
   }
   cur = sessions[active];
+  // The close path deletes the active session and only then spawns its
+  // replacement, so a batch can apply with nothing active: nothing to draw
+  // into, and the sidebar still reads right.
+  if (!cur) { drawSidebar(); return; }
+  drawHeader();
   drawStatus();
+  drawSidebar();
   tickIfBusy();
   if (cur.pinned) scrollToBottom();
 }
@@ -264,6 +1174,13 @@ const APP_NAME = 'CuaCode';
 function setTitle(name) {
   name = sanitize(name || '').trim();
   cur.title = name;
+  // A name belongs to its session's row always, and to the navbar and window
+  // title only when that session is the one on screen: a background session
+  // getting named mid-run must not steal the header from the conversation
+  // being read. switchTo re-renders the header when the session is shown.
+  drawSidebar();
+  if (cur.id !== active) return;
+  drawHeader();
   const full = name ? APP_NAME + ' - ' + clip(name, 60) : APP_NAME;
   document.title = full;
   if (typeof goTitle === 'function') goTitle(full);
@@ -295,7 +1212,6 @@ function reset() {
   // Attached to a message in a conversation that is no longer on screen.
   cur.pending = [];
   drawTray();
-  push('hint');
 }
 
 // ------------------------------------------------------------- the folding
@@ -308,9 +1224,17 @@ function fold(ev, loading) {
     return;
   }
 
-  switch (ev.state) {
+  // Replies are typed on the envelope ("sessions" carries no data.state),
+  // statuses on data.state. Route by the state when there is one, the type
+  // otherwise - deck's fold reads the same two fields (deck/main.go).
+  switch (ev.state || ev.type) {
     case 'startup':
     case 'ready':
+      // The worker's store id, on the line that opens the conversation. A
+      // spawned session is a real store session from birth; without this tie
+      // the tree and palette would list it twice once session.list runs -
+      // once as the live row, once as the record it committed.
+      if (ev.data && ev.data.session_id && !cur.storeId) cur.storeId = ev.data.session_id;
       notice('', 'welcome!');
       break;
 
@@ -319,8 +1243,12 @@ function fold(ev, loading) {
     // so there is nothing to draw but the names. See main.py's replay().
     case 'user':
       // A message sent into a run in flight is spoken into that round, so the
-      // calls block stays open; one that starts a turn closes whatever is left.
+      // calls block stays open; one that starts a turn closes whatever is
+      // left. It is the session's last activity - the sidebar's "just now" -
+      // unless it is a replay: an archive's history is not news, and the row
+      // keeps the place the store record gave it.
       if (!BUSY.has(cur.status.State)) { boundary(); closeCalls(); }
+      if (!cur.replaying) cur.lastAct = Date.now();
       push('user', { text: ev.token || '', shots: (ev.images || []).map(i => ({ name: i.name, b64: i.b64 })) });
       break;
 
@@ -387,17 +1315,23 @@ function fold(ev, loading) {
       finish();
       break;
 
-    case 'error':
+    case 'error': {
       closeCalls();
       settleProse();
-      notice('err', 'error: ' + clip(sanitize(ev.token || ev.err || ''), 400));
+      // The message travels by whichever field the sender chose: token on a
+      // run's error, err on a connection loss, data.error on a failed command
+      // reply (project.rename, session.pin, ...). Dropping any of them is how
+      // a bare "error: " with nothing behind it gets on screen.
+      const msg = clip(sanitize(ev.token || ev.err || (ev.data && ev.data.error) || ''), 400);
+      notice('err', 'error: ' + (msg || 'no detail'));
       // A turn the connection ended rather than the model. What streamed before
       // it went is still on screen and still in the history, so the next message
       // carries on from it instead of starting over - which is only obvious if
       // it is said.
-      if (ev.data && ev.data.kept) notice('warn', 'partial reply kept · say anything to carry on');
+      if (ev.data && ev.data.kept) notice('warn', 'partial reply kept \u00b7 say anything to carry on');
       finish();
       break;
+    }
 
     // The request never landed and is going out again. Worth a row of its own:
     // a silent retry and a hung app look identical from this side of the screen.
@@ -408,12 +1342,77 @@ function fold(ev, loading) {
       break;
     }
 
+    // The store's archive, one reply to the session.list asked at startup -
+    // and to every re-ask, which the palette and the pin command fire. Fills
+    // the sidebar's project tree; the live half is the workspace's own
+    // sessions and never comes from here.
+    case 'sessions': {
+      const d = ev.data || {};
+      const fresh = d.sessions || [];
+      // Same list, no event: most opens change nothing, and skipping keeps
+      // the entrance stagger from replaying under a palette already open.
+      if (JSON.stringify(fresh) !== JSON.stringify(storeList)) {
+        storeList = fresh;
+        // Session pins persist on the meta (a ts, oldest pin first), so the
+        // store is the truth: a pin whose command failed drops here, and a
+        // new window opens the way the last one was left.
+        pins.clear();
+        for (const m of fresh) if (m.pinned) pins.set(m.id, Date.parse(m.pinned) || 0);
+        drawSidebar();
+        if (!veil.hidden) palDraw();
+      }
+      break;
+    }
+
+    // The tree's project list, one reply to project.list / project.add /
+    // project.remove / project.pin. A reply, so it must be reachable by type -
+    // same wire shape as "sessions", no data.state. The pin order rides along:
+    // project pins persist in projects.json, so a new window opens the way the
+    // last one was left. Array order is pin age; pinSeq continues above it.
+    case 'projects': {
+      const d = ev.data || {};
+      const fresh = d.projects || [];
+      const freshPins = d.pinned || [];
+      const freshNames = d.names || {};
+      const freshIcons = d.icons || {};
+      if (JSON.stringify(fresh) !== JSON.stringify(promoted) ||
+          JSON.stringify(freshPins) !== JSON.stringify([...projPins.keys()]) ||
+          JSON.stringify(freshNames) !== JSON.stringify(projNames) ||
+          JSON.stringify(freshIcons) !== JSON.stringify(projIcons)) {
+        promoted = fresh;
+        projNames = freshNames;
+        projIcons = freshIcons;
+        projPins.clear();
+        freshPins.forEach((n, i) => projPins.set(n, i));
+        pinSeq = Math.max(pinSeq, freshPins.length);
+        drawSidebar();
+        if (cur) drawHeader();   // the navbar's project tag carries the display name too
+        if (!veil.hidden) palDraw();
+      }
+      break;
+    }
+
     // A session change replaces the conversation, so the feed goes with it:
     // what is on screen belongs to the session that was open.
     case 'session': {
       const d = ev.data || {};
       reset();
       if (!loading) { notice('', 'new session'); break; }
+      // The sidebar folds this conversation's archive row away: it is live
+      // now, and the live row carries the running dot.
+      // The replay below is the conversation's past, not new activity: until
+      // it ends, nothing it streams may move the row's recency.
+      cur.replaying = true;
+      cur.storeId = d.session_id || null;
+      // The conversation belongs to the project it was spawned in, which can
+      // differ from this worker's own directory: take it from the record.
+      const rec = storeList.find(m => m.id === d.session_id);
+      if (rec && rec.cwd) cur.project = projName(rec.cwd);
+      // The conversation keeps the place its archive row held: lastAct seeds
+      // from the record's updated, so reopening a week-old session does not
+      // leap to the top of the tree and palette as if it had just moved.
+      // Messages and finished runs in this window take over from here.
+      if (rec && rec.updated) cur.lastAct = Date.parse(rec.updated) || cur.lastAct;
       let text = 'resumed session ' + (d.session_id || '');
       const n = num(d.msg_count);
       if (n > 0) text += ' · ' + n + (n === 1 ? ' message' : ' messages');
@@ -496,6 +1495,7 @@ function settle(name, data) {
 
 function finish() {
   cur.runStart = 0;
+  cur.replaying = false;  // done/cancelled/error all end a replay as well as a run
 }
 
 // ------------------------------------------------------------------ the DOM
@@ -506,8 +1506,7 @@ function finish() {
 function build(b) {
   const el = document.createElement('div');
   el.className = 'b ' + b.kind;
-  // Set before the switch: the head renderers below read b.el to put the run's
-  // verdict on the rail, and a block cannot be drawn before it exists.
+  // Set before the switch: the head renderers below read b.el, and a block cannot be drawn before it exists.
   b.el = el;
 
   switch (b.kind) {
@@ -553,21 +1552,6 @@ function build(b) {
       el.textContent = b.text;
       break;
 
-    case 'hint':
-      el.innerHTML =
-        '<dl>' +
-          '<dt>the rail</dt><dd class="legend">' +
-            '<span><i class="dot"></i>you spoke</span>' +
-            '<span><i class="think"></i>the agent thought</span>' +
-            '<span><i class="act"></i>the agent touched this machine</span>' +
-          '</dd>' +
-          '<dt>keys</dt><dd>' +
-            '<kbd>enter</kbd> send &nbsp;·&nbsp; <kbd>shift+enter</kbd> newline &nbsp;·&nbsp; <kbd>esc</kbd> stop<br>' +
-            '<kbd>ctrl+t</kbd> thinking &nbsp;·&nbsp; <kbd>tab</kbd> fold calls &nbsp;·&nbsp; <kbd>ctrl+b</kbd> background' +
-          '</dd>' +
-          '<dt>images</dt><dd>drop a file on the window, or paste one</dd>' +
-        '</dl>';
-      break;
   }
   return el;
 }
@@ -928,6 +1912,19 @@ input.addEventListener('keydown', e => {
 document.addEventListener('keydown', e => {
   const ctrl = e.ctrlKey || e.metaKey;
 
+  // The palette outranks the app's keys: cmd+K opens it over anything, and
+  // while it is up, cancel-on-Escape and tab-for-calls belong to it.
+  if (ctrl && e.key.toLowerCase() === 'k') { e.preventDefault(); palToggle(); return; }
+  if (!veil.hidden) {
+    if (e.key === 'Escape') { palClose(); return; }
+    if (e.key === 'Tab' || e.key === 'Enter' || e.key.startsWith('Arrow')) e.preventDefault();
+    return;
+  }
+
+  // The details editor owns its keys the same way - its Enter and Esc live on
+  // its inputs, and the focus-steal below would empty it one keystroke in.
+  if (editingProj) return;
+
   if (e.key === 'Escape') { go('goCancel'); return; }
   if (ctrl && e.key === 'b') { e.preventDefault(); go('goBackground'); return; }
   if (ctrl && e.key === 't') { e.preventDefault(); toggleThink(); return; }
@@ -955,8 +1952,11 @@ function send() {
     cur.runStart = performance.now();
   }
   // Echoed locally, not waited for (a round-trip echo would read as lag), and
-  // through the same entry point as everything else, so the feed has one way in.
-  window.__cua.push({ events: [{ state: 'user', token: text, images: shots }], status: cur.status, loading: false });
+  // through the same entry point as everything else, so the feed has one way
+  // in. Stamped with its session: apply() routes an id-less batch to whatever
+  // is active when the frame runs, and a switch in that gap moved the message
+  // - and the sender's status snapshot with it - into another session's feed.
+  window.__cua.push({ session: cur.id, events: [{ state: 'user', token: text, images: shots }], status: cur.status, loading: false });
   settleProse();
   scrollToBottom();
   // goSend when there is nothing attached, so the common message crosses the
@@ -1276,6 +2276,10 @@ function clip(s, n) {
 
 // The first session exists before any worker event, so the input has a home and
 // the held-back startup line has a feed to land in.
+// The binding answers one question about the host: when it exists, the window
+// has handed its bar to the page and the native lights sit on the sidebar's
+// first row, so the brand row steps over them.
+if (typeof goTitle === 'function') document.body.classList.add('native');
 sessionFor('default');
 switchTo('default');
 reset();
@@ -1366,8 +2370,8 @@ function chunks(text, n) {
 // picture of a picture in the source.
 function demoTray() {
   cur.pending = [
-    { name: 'failing-tests.png', mime: 'image/png', size: 184320, b64: swatch('#7fa8f0', '#a98fc4') },
-    { name: 'screenshot 2026-08-23 at 14.02.11.png', mime: 'image/png', size: 962560, b64: swatch('#d9a15c', '#e8615f') },
+    { name: 'failing-tests.png', mime: 'image/png', size: 184320, b64: swatch('#92b8e0', '#3d6fa9') },
+    { name: 'screenshot 2026-08-23 at 14.02.11.png', mime: 'image/png', size: 962560, b64: swatch('#e0a35e', '#ff5c62') },
   ];
   drawTray();
 }
@@ -1384,10 +2388,74 @@ function swatch(a, b) {
   return c.toDataURL('image/png').split(',', 2)[1];
 }
 
+// demoStore paints fake archive rows so ?demo shows the tree with something in
+// it. Real data would make screenshots depend on this machine's store.
+function demoStore() {
+  const h = 3600e3, d = 24 * h;
+  const mk = (id, title, back, cwd) => ({
+    id, title, cwd,
+    updated: new Date(Date.now() - back).toISOString(),
+  });
+  const core = '/Users/boaz/Work/CuaCode-core';
+  // The tree's groups render only for promoted dirs (or the current project),
+  // so the demo paints its whitelist too - same reason the store list is fake.
+  promoted = [core, '/Users/boaz/Work/northwind', '/Users/boaz/Work/contoso'];
+  // One emoji, one gradient, and the custom name, so the shots show the
+  // details editor's output. Same reason the store list is fake.
+  projNames = { [core]: 'CuaCode Core' };
+  projIcons = { '/Users/boaz/Work/northwind': '\ud83d\ude80', '/Users/boaz/Work/contoso': 'grad:2' };
+  return [
+    mk('d1', 'Fix flaky test', 1 * d + 2 * h, core),
+    mk('d2', 'Refactor auth flow', 1 * d, core),
+    mk('d3', 'Review open PR', 5 * d, core),
+    mk('d4', 'Add csv export', 5 * d + 2 * h, core),
+    mk('d5', 'Fix broken build', 5 * d + 5 * h, core),
+    mk('d6', 'Trim bundle size', 6 * d, core),
+    mk('d7', 'Rename config keys', 7 * d, core),
+    mk('d8', 'Add retry logic', 8 * d, core),
+    mk('d9', 'Update onboarding docs', 9 * d, core),
+    mk('d10', 'Fix pagination bug', 1 * d, '/Users/boaz/Work/northwind'),
+    mk('d11', 'Add search bar', 2 * d, '/Users/boaz/Work/northwind'),
+    mk('d12', 'Import customer list', 3 * h, '/Users/boaz/Work/contoso'),
+    mk('d13', 'Quarterly report draft', 23 * d, '/Users/boaz/Work/contoso'),
+  ];
+}
+
 if (location.search.includes('demo')) {
+  // The project is not part of a conversation, so no fixture can carry it - the
+  // same reason demoTray paints its own chips. Painted here for every scenario.
+  PROJECT = 'CuaCode';
+  storeList = demoStore();
+  // The demo photographs rows, not a closed tree: its groups start open.
+  // ?demo&closed skips that, for looking at the collapsed tree itself.
+  if (!location.search.includes('closed'))
+    for (const n of ['CuaCode', 'CuaCode-core', 'northwind', 'contoso']) expanded.add(n);
+  drawHeader();
+  drawSidebar();
+  if (location.search.includes('palette')) palOpen();
+  if (location.search.includes('openproj')) revealProject('/Users/boaz/Work/sidequest');
+  // The rail (also forced below 800px) and persisted session pins, each their
+  // own hook so the older shots stay stable.
+  if (location.search.includes('rail')) { sideRail = true; drawSidebar(); }
+  if (location.search.includes('pinsess')) {
+    pins.set('default', Date.now() - 60000);   // the live conversation
+    pins.set('d1', Date.now() - 30000);        // an archive row
+    drawSidebar();
+  }
+  if (location.search.includes('pinproj')) {
+    projPins.set('northwind', ++pinSeq);
+    projPins.set('sidequest', ++pinSeq);
+    drawSidebar();
+  }
   const name = new URLSearchParams(location.search).get('demo') || 'default';
   if (name === 'folded') { showThink = true; foldCalls = true; }
   if (name === 'default') demoTray();
   if (location.search.includes('fast')) demoFast();
   else demoTimed();
+} else {
+  // The store's archive and the project list, for the sidebar. Asked once
+  // here; the places that change what they show refresh them. In ?demo both
+  // are painted fake above, and there are no bindings to ask anyway.
+  go('goCommand', 'session.list', null);
+  go('goCommand', 'project.list', null);
 }
