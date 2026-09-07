@@ -51,8 +51,10 @@ even when the feed machinery itself is broken.
 
 The batch carries a `session` id, because the app is a workspace: several
 sessions run at once, each a separate worker process with its own pump, and the
-page routes each batch to that session's feed. A batch without an id belongs to
-the active session. The page keeps one feed per session in the DOM and shows only
+page routes each batch to that session's feed. Every real batch is stamped by
+its own pump; an id-less batch (the demo replay) belongs to the active session,
+and a batch for a closed session is dropped - the worker's dying flush must not
+resurrect its feed. The page keeps one feed per session in the DOM and shows only
 the active one - `display:none` does not lay out, so a background session's feed
 costs nothing to keep, and switching to it is one layout, not a re-render.
 
@@ -67,10 +69,12 @@ The bindings are declared in `main.go`:
 | `goCancel()` | stop the run in flight |
 | `goBackground()` | background the running tool call |
 | `goCommand(action, fields)` | worker command (`session.list`, `session.load`, …) |
+| `goLoad(id)` | open an archived conversation in the active session: flips the pump's loading flag, then `session.load` |
+| `goPickFolder()` | native folder picker (NSOpenPanel, darwin); → the path, or "" on cancel |
 | `goTitle(title)` | name the OS window - the webview does not follow `document.title` |
 | `goReply(id, type, fields)` | answer a worker prompt |
 | `goReady()` | the page can be evaluated into; flushes what was held |
-| `goNewSession()` | start a fresh worker, make it active; → its id |
+| `goNewSession(dir)` | start a fresh worker, make it active; → its id. Empty dir = the launch directory; a dir makes it the session's own working directory and project |
 | `goSwitch(id)` | make a session active |
 | `goClose(id)` | close a session; → the next active id |
 
@@ -117,32 +121,29 @@ sits permanently behind the text it is following.
 
 ---
 
-## The rail is information
+## Never build these (Boaz's standing order)
 
-The hairline down the left gutter is not decoration. It is drawn by the scroller
-itself (`.feed` background, `background-attachment: local`) so it is continuous
-across the whole run, and each block paints its own stretch to say what kind of
-time that was:
+Do not add, propose, or sneak in any of:
 
-| mark | means |
-|---|---|
-| pink dot | the human spoke |
-| dashed | the agent was thinking |
-| solid 3px bar | the agent was touching this machine |
-| bar amber, breathing | that batch is still running |
-| bar green / red | how it ended |
+- Drag-to-reorder of tree rows or groups. Reordering exists, but as explicit
+  up/down arrows on promoted and pinned group heads (`project.move`) - never
+  as a drag gesture, and never for session rows (their order is recency and
+  pins).
+- Right-click context menus.
+- Live multi-window sync of any kind (polling, push channels, refresh timers -
+  every refresh rides a user action, and the no-idle-work rule stays).
+- Keyboard navigation of the tree itself (the palette covers keyboard access).
+- Fuzzy correction for `#project` scoping.
+- User-resizable sidebar widths. The sidebar has set sizes only: 268px out,
+  88px rail in (88 so the native lights fit without clipping), and the rail
+  is forced below a 800px-wide window.
+- Project details beyond name + icon. The icon is one of: a single emoji, a
+  gradient circle from the fixed set ("grad:<n>"), or an uploaded image
+  (goPickIcon + canvas downscale to 64px, stored as a data URL, capped at
+  96KB). No free-form color pickers, no per-project notes.
 
-A failed run is findable by scrolling past its red. If you restyle this, keep the
-encoding - a colored line that does not mean anything is worse than no line.
-
-Note a block cannot paint outside itself, so the rail's continuity has to come
-from the scroller. That is why it is a background and not a pseudo-element.
-
-The other structural claim in the design: **prose is a document, everything else
-is an instrument.** The agent's answers are serif at reading measure; thinking,
-tool rows, status and the user's own messages are mono. A message to an agent is
-a command, so it belongs to the instrument half. Change the faces if you like,
-keep the split - it is the fastest way to tell who is speaking.
+If a request seems to want one of these, stop and ask Boaz instead of building
+a version of it.
 
 ---
 
@@ -160,7 +161,7 @@ go build -o bridge ./frontends/bridge && ./bridge --serve
   the live amber bar, and results settling.
 - `?demo=name` picks a scenario: `long` (a session long enough to scroll),
   `resumed` (the reopened-session banner and a names-only replay), `cancelled`
-  (a run stopped mid-tool, red rail), `folded` (thinking unfolded, calls
+  (a run stopped mid-tool), `folded` (thinking unfolded, calls
   folded), `workspace` (two sessions at once, switched between, so the tabs and
   per-session feeds show).
 - `?demo&fast` collapses every wait and applies each batch synchronously, so the
@@ -196,28 +197,90 @@ an inspector inside the app's window. If the feed stops growing, look there.
 ## Known gaps
 
 - No packaging (`.app` / `.exe` / AppImage) and no native menus. `webview_go`
-  provides neither. If those become required, the UI ports to Wails untouched -
+  provides neither (the folder picker is hand-bound cgo for that reason). If
+  those become required, the UI ports to Wails untouched -
   that is the point of keeping the page free of Go-specific assumptions.
 - cgo, so cross-compiling needs a runner per OS. Linux needs WebKitGTK present.
+- The folder picker and the titlebar shift are darwin-first; the other
+  platforms have no-op stubs.
 
 ---
 
 ## Where things are
 
 ```
-main.go       wiring: flags, window, bindings, --serve
-workspace.go  the set of open sessions; each a worker process with its own pump
-pump.go       the one seam between worker and page; coalescing lives here
-assets.go     go:embed + the loopback origin
-pump_test.go  the coalescing contract
-ui/index.html the page shell and its CSP
-ui/app.css    tokens, the rail, the two-media split, the tabs
-ui/app.js     block model, fold(), rendering, tool decoding, the demo replay
-ui/fixture.js the scripted conversations ?demo replays
+main.go            wiring: flags, window, bindings, --serve
+titlebar_darwin.go the window's top hand-off: titlebar goes transparent and
+                   full-size, so the native lights sit on the page's sidebar
+                   (see below); titlebar_other.go is the no-op elsewhere
+picker_darwin.go   the native folder picker (NSOpenPanel); picker_other.go stubs it
+workspace.go       the set of open sessions; each a worker process with its own pump
+pump.go            the one seam between worker and page; coalescing lives here
+assets.go          go:embed + the loopback origin
+pump_test.go       the coalescing contract
+ui/index.html      the page shell and its CSP
+ui/app.css         tokens, sidebar and tree; the feed is bare (chat ui dropped, redesign pending)
+ui/app.js          block model, fold(), rendering, the project tree, tool decoding, the demo replay
+ui/fixture.js      the scripted conversations ?demo replays
 ```
+
+The sidebar carries the app's own chrome: the wordmark and pill, a collapse
+chevron, a search row (opens the palette), and the project tree - projects
+from each session's own spawn directory and the store's `cwd`s, filtered to
+the promoted projects (projects.json), the current cwd, and live sessions -
+and under each project the sessions that belong to it, live ones first, each
+row carrying its state dot. The sidebar is either full width or the 76px rail
+(toggle chevron; forced below 800px), never anything between. macOS gives the
+traffic lights back as an overlay: `styleTitlebar` (titlebar_darwin.go) makes the native
+titlebar transparent and full-size-content, dark background and appearance, so
+the lights render over the sidebar's first row. Three consequences are wired
+together: the brand row (`body.native .brand`) steps right of the lights and is
+hidden inside the narrow-width layout, where the strip of window above belongs
+to the OS alone; the wordmark never draws its own lights, because they are real
+Buttons and close the window.
 
 `ui/app.js` mirrors `frontends/deck`'s block model deliberately - `fold`,
 `stream`, `boundary`, `openCalls`, `settle` and the tool-argument formatting are
 the same shapes as `deck/feed.go` and `deck/calls.go`. When the worker grows a
 new event or a new tool, change both, and read deck's version first: it is the
 older and better-tested of the two.
+
+---
+
+## The sidebar's rules of motion
+
+These are Boaz's calls, not defaults - do not "simplify" them away.
+
+- **The row dot is a notification, not a label.** Amber and breathing while
+  that session's worker runs; green when a run *finished* there and nobody has
+  looked since (cleared by opening the session); archive rows carry no dot.
+- **Row recency is `lastAct`.** It moves only on a user message and on a run
+  finishing - never on streaming, thinking, or tool calls, or the sidebar
+  reshuffles every time the model breathes.
+- **Pins persist.** A pinned row floats above its project's other sessions,
+  oldest pin first, and holds its place regardless of activity. Both kinds
+  persist now: session pins are a ts on the conversation's meta (worker
+  command `session.pin`, reply re-stamps the frontend), project pins a name
+  list in projects.json (`project.pin`). A set pin renders always - it is
+  state, not an affordance. In the rail the pins do not render; the rail
+  keeps the tree's order (pinned groups first), so nothing lies about what
+  sits on top.
+- **The groups hold their places.** Pinned projects first, in pin order; then
+  the project this window works in; then promoted projects in promotion order
+  (projects.json); then everything else alphabetically. The recency/name
+  toggle orders the sessions inside each group and never moves a group - the
+  tree must not reshuffle as sessions open and age.
+- **Project details are a display name and one emoji.** The pencil on a
+  promoted group's head opens an inline editor; the tree freezes under it
+  (Enter commits via `project.rename`, Esc cancels). The display name and
+  emoji render in tree, rail, palette and header, and `#scope` matches both
+  the custom name and the basename - but the group key stays the basename,
+  so pins and promotion never detach from their group.
+- **The tree only animates on the user's own action.** Interactive paths set
+  `sideMotion`; the next rebuild glides moved rows/groups from their old spots
+  (FLIP via `--flip`) and fades in new ones, staggered. Batch redraws -
+  streams, dots, titles - never set it, so nothing moves mid-stream, and
+  `?demo&fast` never animates (deterministic screenshots). All of it dies
+  under prefers-reduced-motion.
+- **The navbar and window title belong to the session on screen.** A
+  background session's name or project never draws them; only `switchTo` does.
