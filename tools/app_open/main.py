@@ -5,8 +5,12 @@ def run(args: dict, ctx) -> dict:
     app = args["app"]
     m = _window.backend()
 
-    self_handle = m.get_frontmost()
-    self_snapped = _window.park_self(self_handle)
+    # The agent's own window, by name -- the session's own app, not whatever
+    # happens to be frontmost right now. Mid-run that is usually the app being
+    # driven, and parking IT in the left strip is how the driven app and the
+    # agent's window swap places for no reason (and how a GUI frontend's
+    # window -- the agent's actual home -- ended up shrunk to a third).
+    self_snapped = _window.park_self(getattr(ctx, "self_identity", None))
 
     # Taken before the launch so that anything the app drags up with it -- a
     # helper process, a second app it hands the request to -- is known to be new
