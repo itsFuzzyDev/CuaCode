@@ -62,7 +62,7 @@ def load_tools(tools_dir="tools") -> dict[str, Tool]:
         desc_f, schema_f, main_f = folder / "Description.md", folder / "InputSchema.json", folder / "main.py"
         missing = [f.name for f in (desc_f, schema_f, main_f) if not f.exists()]
         if missing: raise RuntimeError(f"{folder.name}: missing {missing}")
-        meta, body = parse_frontmatter(desc_f.read_text())
+        meta, body = parse_frontmatter(desc_f.read_text(encoding="utf-8"))
         mod = _load_main(main_f)
         if not hasattr(mod, "run"): raise RuntimeError(f"{folder.name}: main.py has no run()")
         # A tool whose options only exist at runtime -- which subagents are
@@ -72,7 +72,7 @@ def load_tools(tools_dir="tools") -> dict[str, Tool]:
         registry[folder.name] = Tool(
             name=meta.get("name", folder.name),
             description=mod.describe(body) if hasattr(mod, "describe") else body,
-            input_schema=mod.schema() if hasattr(mod, "schema") else json.loads(schema_f.read_text()),
+            input_schema=mod.schema() if hasattr(mod, "schema") else json.loads(schema_f.read_text(encoding="utf-8")),
             output_schema=meta.get("output", {}),
             active=meta.get("active", True),
             require_permissions=meta.get("require_permissions", False),
