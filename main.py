@@ -10,7 +10,7 @@ if "--usage" in sys.argv:
 
 from handler.protocol import IPC
 from handler.agent.main import generate
-from handler.agent import providers
+from handler.agent import inline, providers
 from handler.agent.background import JOBS
 from handler.session import store
 from handler.session.main import Session
@@ -18,6 +18,7 @@ from handler import config, context, environment, usage
 from integrations.memory import loader as memory, naming, recall
 from integrations.instructions import loader as instructions
 from integrations.skills import loader as skills
+from integrations.permissions import decider
 
 SETTINGS = config.settings()
 
@@ -36,19 +37,24 @@ sess = Session.create(provider=SETTINGS["provider"], model=SETTINGS.get("model",
 messages = sess.messages()
 # The ready line carries the session's store id, so a frontend can tie its live
 # row to the record this worker will one day commit -- without it the same
-# conversation shows twice the moment the frontend reads session.list.
-ipc.send("status", {"state": "ready", "session_id": sess.id})
+# conversation shows twice the moment the frontend reads session.list. The mode
+# rides beside it, so a frontend adopts where config left this instead of
+# asserting its own default over it.
+ipc.send("status", {"state": "ready", "session_id": sess.id, "mode": config.permission_mode()})
 # Tools run in this process, so the memory tool retitles the object the loop is
 # holding rather than the file underneath it -- a write to meta.json would be
 # undone by the next commit, which persists the whole dict from memory.
 naming.set_live(sess)
 
-# Which tools need asking is declared per tool (require_permissions); this only
-# records whether the frontend on the other end answers when asked. It has to be
-# recorded, because the ask blocks forever by design -- a question the user only
-# gets to tomorrow is still answered tomorrow -- and a frontend that does not
-# implement the reply would otherwise hang the run instead of waiting for it.
-ASK_PERMISSION = False
+# Which tools need asking is declared per tool (require_permissions); this
+# records how the frontend on the other end wants calls gated -- ask (the
+# user decides), auto (a small model screens them), or off (never ask). The
+# boot mode is config's to choose; a frontend re-declares whatever it wants
+# the moment it is up, and /permissions moves it live from there. ask and
+# auto have to be recorded because ask blocks forever by design -- a question
+# the user only gets to tomorrow is still answered tomorrow -- and a frontend
+# that never answers would otherwise hang the run instead of waiting.
+PERM_MODE = config.permission_mode()
 
 # What the last round actually cost, kept so /context can report it long after
 # the event that carried it went past. One round, not a running total: the
@@ -80,16 +86,28 @@ def context_fields(usage: dict) -> dict:
         out["context_left"] = max(window - used, 0)
     return out
 
-def ask_permission(name: str, args: dict, preview: dict = None) -> bool:
+def ask_permission(name: str, args: dict, preview: dict = None, note: str = None) -> bool:
     # timeout=None keeps the question open as long as the user needs; a cancel
     # still ends the run it belonged to (abandoned reads as refused), and the
     # loop's own cancel check is what actually stops the turn.
     # preview is what the call would do -- a diff, a line of prose -- sent as its
     # own field, so a frontend that never heard of it draws what it always drew.
+    # note is why the question is being asked when it came from the auto gate
+    # rather than the tool: the reason a small model flagged this call.
     payload = {"name": name, "args": args}
     if preview: payload["preview"] = preview
+    if note: payload["note"] = note
     reply = ipc.call("permission", payload, timeout=None, stop=ipc.cancelled)
     return bool(reply and (reply.data or {}).get("allow"))
+
+def auto_decide(tool, name: str, args: dict, preview: dict, tail: str, ctx) -> tuple:
+    """The auto gate: a configured small model decides the call.
+
+    Mirrors ask_permission's place in the loop; the seam in generate() calls
+    it with everything the gate needs (the tool, the exact arguments, what the
+    call says it would do, the recent turns). Returns (allow, reason).
+    """
+    return decider.decide(ctx, tool, name, args, preview, tail)
 
 def tool_ordinal(session) -> int:
     """How many tool results the conversation already holds -- the index the
@@ -235,6 +253,87 @@ def drop_empty(s):
     if not s._records:
         store.delete(s.id)
 
+
+def inline_command(env, text: str):
+    """Act on the inline /commands in a chat message.
+
+    Returns True when a blocking command ran (provider, model, vision, effort):
+    the result is the message and the turn stops there, so generate() is not
+    called on a request the command just made wrong. Otherwise returns the text
+    to send -- the unchanged message when no command was present, or the residue
+    after a read-only command (context, usage) was stripped and shown.
+
+    This writes through the global SETTINGS/messages so the *next* turn is
+    built against the new provider/model, exactly as /provider from the palette
+    does -- the inline command and the palette choice are the same switch.
+    """
+    global SETTINGS, messages
+    res = inline.parse(text)
+    if res.blocking:
+        for name, arg in res.blocking:
+            try:
+                notice = _run_inline(name, arg)
+            except ValueError as e:
+                notice = f"{name}: {e}"
+            if notice:
+                ipc.reply(env, "token", {"state": "notice", "token": notice, "status": "running"})
+        return True
+    for name, arg in res.parallel:
+        try:
+            notice = _run_inline(name, arg)
+        except ValueError as e:
+            notice = f"{name}: {e}"
+        if notice:
+            ipc.reply(env, "token", {"state": "notice", "token": notice, "status": "running"})
+    return res.text
+
+
+def _run_inline(name, arg) -> str:
+    """Run one inline command, returning the notice line to show the user."""
+    global SETTINGS, messages
+    if name == "provider":
+        if not arg:
+            return f"provider: {SETTINGS['provider']} - {SETTINGS.get('model', 'no model')}"
+        SETTINGS = config.settings(config.use(arg))
+        sess.set_provider(SETTINGS["provider"])
+        messages = sess.messages()
+        return f"provider -> {SETTINGS['provider']} - {SETTINGS.get('model', 'no model')}"
+    if name == "model":
+        if not arg:
+            return f"model: {SETTINGS.get('model', 'no model')} on {SETTINGS['provider']}"
+        config.update(SETTINGS["provider"], model=arg)
+        SETTINGS = config.settings()
+        sess.set_model(arg)
+        # A model swap can turn vision off; rebuild history or the next request
+        # fails on the screenshots it still holds.
+        messages = sess.messages()
+        return f"model -> {arg}"
+    if name == "vision":
+        if not arg:
+            return f"vision: {config.vision_helper()[0] or 'default - whichever can see'}"
+        config.set_vision_helper(arg)
+        return f"vision -> {arg}"
+    if name == "effort":
+        if not arg:
+            return f"effort: {sess.effort}"
+        if reason := config.effort_block(arg):
+            return f"effort: {reason}"
+        sess.set_effort(arg)
+        config.set_default_effort(sess.effort)
+        return f"effort -> {sess.effort}"
+    if name == "context":
+        r = context.report(sess, SETTINGS, ctx, messages=messages, last=LAST_TURN)
+        left = f" ({r['free']} left of {r['window']})" if r.get("window") else ""
+        kind = "measured" if r.get("measured") else "estimated"
+        return f"context: {r['used']} tokens filling the window{left} · {kind}"
+    if name == "usage":
+        t = usage.rollup(0)
+        tot = t.get("total") or {}
+        return (f"usage: {t.get('sessions', 0)} sessions · {tot.get('rounds', 0)} rounds · "
+                f"{tot.get('in', 0)} in / {tot.get('out', 0)} out tokens")
+    return None
+
+
 while True:
     # The frontend is gone: pipe EOF or reparented to launchd, so exit rather
     # than poll an empty inbox forever. Mirrors `stop`: background work asked
@@ -301,8 +400,10 @@ while True:
             ipc.reply(env, "jobs", {"killed": JOBS.kill(jid), "job": jid,
                                     "jobs": [j.brief() for j in JOBS.list()]})
         elif action == "permission.mode":
-            ASK_PERMISSION = env.data.get("mode") == "ask"
-            ipc.reply(env, "status", {"state": "permission", "mode": "ask" if ASK_PERMISSION else "auto"})
+            mode = (env.data.get("mode") or "ask").lower()
+            if mode not in ("ask", "auto", "off"): mode = "ask"
+            PERM_MODE = mode
+            ipc.reply(env, "status", {"state": "permission", "mode": mode})
         elif action == "tool.detail":
             # The result itself, one call at a time and never streamed by
             # default -- the wire carried only its size. Normally answered on
@@ -571,6 +672,19 @@ while True:
                 sess.set_model(now[1])
                 messages = sess.messages()
             text = env.data.get("text", "")
+            # Inline /commands typed in or beside the message. A blocking one
+            # (provider, model, vision, effort) is the whole answer: it runs,
+            # its result is shown, and the turn stops here -- the request the
+            # model would have made is about to be wrong, so there is nothing
+            # to generate until it is sent again under the new setting. The
+            # read-only ones (context, usage) run, are shown, and the rest of
+            # the message still goes on. Either way the command never reaches
+            # the model as prose.
+            _inline = inline_command(env, text)
+            if _inline is True or (isinstance(_inline, str) and not _inline.strip()):
+                continue
+            if isinstance(_inline, str):
+                text = _inline
             # What the user attached to this message, as [{"name", "b64"}].
             # Only the payload reaches the model -- the filename is for the
             # frontends, which show it in place of a picture they have no way
@@ -695,7 +809,11 @@ while True:
                                       # generate() clears it as it consumes it,
                                       # so one press backgrounds one call.
                                       detach=ipc.background,
-                                      ask=ask_permission if ASK_PERMISSION else None):
+                                      # In auto the gate screens first and ask
+                                      # takes the calls it flags; ask alone is
+                                      # plain ask mode, neither is off.
+                                      ask=ask_permission if PERM_MODE in ("ask", "auto") else None,
+                                      auto=auto_decide if PERM_MODE == "auto" else None):
                     typ = chunk.get("type")
                     if typ == "round":
                         # generate() takes its own rollback mark immediately
@@ -703,6 +821,14 @@ while True:
                         # rewind here drops exactly the round it drops.
                         round_mark = len(messages)
                         round_cost = {}
+                        # Committed BEFORE the mark is taken: everything in
+                        # _pending right now is provably consistent -- user
+                        # message and recall on the first round, each finished
+                        # round on the rest -- so this is the point a force-
+                        # kill loses nothing but the round in flight. The
+                        # error path below rewinds to a mark of 0 and its
+                        # commit can no longer flush a partial round.
+                        sess.commit()
                         sess.round_start()
                     elif typ == "assistant":
                         sess.add_assistant(chunk.get("thinking", ""), chunk.get("content", ""),

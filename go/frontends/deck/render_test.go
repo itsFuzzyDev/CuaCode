@@ -125,7 +125,7 @@ func TestStatusBarTrims(t *testing.T) {
 	loaded := func(w int) *model {
 		m := play(t, w, 24)
 		m.provider, m.modelID = "anthropic", "claude-sonnet-4-20250514"
-		m.effort, m.askMode, m.scroll = "max", false, 4
+		m.effort, m.permMode, m.scroll = "max", "off", 4
 		m.lastRun = 90 * time.Second
 		return m
 	}

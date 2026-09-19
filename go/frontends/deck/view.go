@@ -601,10 +601,12 @@ func (m *model) renderStatus() string {
 	if n := len(m.permQueue); n > 0 {
 		left = append(left, seg{text: paint(cCall, plural(n, "question", "questions")+" waiting"), drop: 1})
 	}
-	// Only worth a word when it is off: asking is the default, and running
-	// file and shell calls unattended is the state worth noticing.
-	if !m.askMode {
+	// Worth a word whenever it is off the default: asking is the default,
+	// and both other states change who answers a tool call.
+	if m.permMode == "off" {
 		left = append(left, seg{text: paint(cWarn, "no prompts"), drop: 1})
+	} else if m.permMode == "auto" {
+		left = append(left, seg{text: paint(cCall, "perm auto"), drop: 1})
 	}
 	// Likewise the effort: shown only once it has been moved off whatever the
 	// provider does by default, because that is when it explains the wait.

@@ -178,7 +178,7 @@ The pointer-and-keyboard ones (`click`, `key`, `scroll`, `type_text`,
 
 | Name | What it is |
 | --- | --- |
-| `deck` | Terminal, the one to start with: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+V` attaches an image to the message, `Ctrl+O` opens the call under the cursor in full - every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/help`, `/context`, `/usage`, `/new`, `/provider`, `/model`, `/effort`, `/vision`, `/params`, `/permissions`, `/clear`, `/quit`); a skill you have installed answers to `/<name>` as well. `@` opens a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command - `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there - and it is redrawn by replaying its stored records as ordinary events. Asks before the calls that can change something (`file`, `shell`, `WebFetch`, `WebSearch`, `mcp`, `workflow`) - a `file` read or a look-only command runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact call, never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
+| `deck` | Terminal, the one to start with: an action tape rather than a chat log. Every block's text starts in the same column and only the marker to its left changes, so the model's prose is the unmarked baseline and what you asked, what it thought, and what it did to the machine are what catch the eye. Tool calls group under a header listing each call, its arguments and its result, with the error spelled out under any that failed. Prose renders a small subset of markdown (fenced and inline code, bold, italic, headings, bullets, quotes). The status bar carries state, a live timer, the call count and a context gauge. `Ctrl+T` expands thinking, `Tab` collapses the tool calls, `Shift+Tab` spells their arguments out in place instead of summarizing them to a line, `Ctrl+V` attaches an image to the message, `Ctrl+O` opens the call under the cursor in full - every argument as it was sent and the whole result, including the command output and page text the wire only reports the size of (`←`/`→` step between calls, `↑`/`↓` and `PgUp`/`PgDn` scroll, `Esc` closes; it opens on a call that is still running too, where the arguments are the point). `Esc` stops the run. `/` opens the command palette (`/help`, `/context`, `/usage`, `/new`, `/provider`, `/model`, `/effort`, `/vision`, `/params`, `/permissions`, `/clear`, `/quit`), at any position in the line - typing it mid-message pops the same menu, and Esc closes it taking the trigger and filter back out. `$` opens the skill menu the same way: choosing one writes `$name ` into the message, and a skill answers to `$name` in any frontend's input. `@` opens a fuzzy file picker over the directory you launched from, inserting absolute paths so the agent resolves them the same way wherever it is running. `Shift+Enter` (or `Alt+Enter`) puts a newline in the message instead of sending it. Reopening an earlier conversation is a startup flag rather than a command - `./run.sh deck --resume` to pick one, `--resume <id>` to go straight there - and it is redrawn by replaying its stored records as ordinary events. Asks before the calls that can change something (`file`, `shell`, `WebFetch`, `WebSearch`, `mcp`, `workflow`) - a `file` read or a look-only command runs without a prompt (see Tool permissions); allowing one "for the session" is scoped to that exact call, never the whole tool, and a refusal is always for the single call. The mouse is left to the terminal so selection, copy and paste work normally; scroll with the arrows and `PgUp`/`PgDn`, and bracketed paste arrives as one line. |
 | `bridge` | GUI window: the same action tape `deck` draws in a terminal, drawn in the OS webview (WKWebView on macOS, WebView2 on Windows, WebKitGTK on Linux) - no bundled browser, no second runtime. Go owns the worker and the session; every pixel is hand-written HTML/CSS/JS under `go/frontends/bridge/ui/`, embedded in the binary and served on loopback behind a random token, so the page loads nothing from the network. The window is a workspace: several sessions at once with a project-grouped sidebar (state dots, recency, window-lifetime pins), and a ⌘K palette that searches sessions across every project and starts new ones in any project's directory or a freshly picked folder. `--resume` opens the session picker, `--serve` prints the page's URL with no worker and no window. Enter sends, **Esc stops the run in flight**. Needs a C toolchain to build. |
 ### Adding a frontend
 
@@ -301,6 +301,26 @@ map[string]any{"allow": true})`. A refusal comes back to the model as a normal
 failed call (`denied by the user`) rather than a missing one, so the turn stays
 valid.
 
+The mode is the frontend's to set, and there are three: `ask` (the user
+decides), `auto`, and `off`. In `auto` the calls that would prompt go to a
+small model instead. `permission` in config.json names it, spelled like
+`vision` - a provider, and optionally a model, blank to inherit whichever the
+conversation runs on:
+
+```json
+"permission": {"mode": "auto", "provider": "ollama", "model": "gemma4:31b"}
+```
+
+The gate runs at low effort with no tools of its own and answers a strict
+yes/no plus one line of reason. A yes runs. A no is not the last word: the
+call is put to the user through the ordinary prompt, with the reason drawn
+above the patch it is a comment on (`flagged: ...`) - the gate is a net for
+what deserves a look, not the decider. Only a frontend that cannot be asked
+takes the refusal itself (`denied by the permission model: <reason>`), so a
+headless run stays safe. The gate fails closed: an error counts as a flag, and
+the person still decides. `off` runs everything the tools ask for without a
+word.
+
 The prompt shows what is actually being allowed rather than a summary of it.
 `deck` draws the call's arguments in full, and where the tool supplies a
 `preview` - `file` does, for a write or an edit - it draws that instead: the
@@ -371,16 +391,18 @@ name collision goes to yours.
 | --- | --- | --- | --- |
 | subagent | `integrations/subagents/*.md` | `~/.cuacode/subagents/` | one model run with its own prompt, tools and output schema |
 | workflow | `integrations/workflows/*.py` | `~/.cuacode/workflows/` | a script running several of them in a fixed order |
-| skill | `integrations/skills/<name>/` | `~/.cuacode/skills/<name>/` | instructions loaded only when needed, by the agent or by `/<name>` |
+| skill | `integrations/skills/<name>/` | `~/.cuacode/skills/<name>/` | instructions loaded only when needed, by the agent or by `$name` |
 | MCP server | `integrations/mcp/servers.json` | `~/.cuacode/mcp/servers.json` | tools this codebase did not write |
 
 `integrations/README.md` has the formats. Nothing MCP is registered by default.
 
 A skill is loadable two ways: the agent calls the `skill` tool, or you type
-`/<name>` in the palette and the instructions ride along with that message. Its
-frontmatter can close either door - `disable-model-invocation: true` keeps it
-out of the tool's list, `disable-user-invocation: true` keeps it out of the
-palette. Setting both leaves a skill nothing can load, so it is dropped.
+`$name` in the message - a `$` that starts a word opens the skill menu in the
+input, and choosing one (or just sending the `$name` as typed) loads the
+instructions beside that message. Its frontmatter can close either door -
+`disable-model-invocation: true` keeps it out of the tool's list,
+`disable-user-invocation: true` keeps it out of the menu. Setting both leaves a
+skill nothing can load, so it is dropped.
 
 ### Adding a tool
 

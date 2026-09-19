@@ -66,6 +66,10 @@ func (m *model) askPermission(id string, data json.RawMessage) {
 	var req struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args"`
+		// Why the call is being put to a person when it came through auto
+		// mode: what the gate flagged about it. An ask-mode request has none
+		// and draws as it always drew.
+		Note string `json:"note"`
 		// What the tool says the call would do, when it can say: a summary
 		// line, and for a write or an edit the patch itself. Sent as its own
 		// field, so a prompt that has never seen one still draws the arguments.
@@ -89,6 +93,7 @@ func (m *model) askPermission(id string, data json.RawMessage) {
 		full:    args,
 		summary: req.Preview.Summary,
 		diff:    req.Preview.Diff,
+		flag:    req.Note,
 		key:     key,
 		scope:   scope,
 	}
@@ -170,7 +175,7 @@ var commands = []command{
 	{"model", "switch the model on the current provider"},
 	{"vision", "which provider looks at images for a blind model"},
 	{"params", "sampling params for the current model"},
-	{"permissions", "toggle asking before tool calls"},
+	{"permissions", "cycle ask, auto-screen, or never ask before tool calls"},
 	{"clear", "clear the feed"},
 	{"quit", "leave"},
 }
@@ -418,12 +423,6 @@ func center(s string, visible, w int) string {
 	return strings.Repeat(" ", left) + s + strings.Repeat(" ", pad-left)
 }
 
-// skillPrefix marks a palette row as a skill rather than a built-in command.
-// A skill is not run on the spot: choosing one writes "/name " into the input
-// so the task can be typed after it, and the worker loads the instructions
-// beside that message when it is sent.
-const skillPrefix = "skill:"
-
 // takeSkills reads the worker's listing of what a user may invoke by name.
 // Skills marked `disable-user-invocation` never arrive here at all.
 func (m *model) takeSkills(data json.RawMessage) {
@@ -449,16 +448,22 @@ func (m *model) takeSkills(data json.RawMessage) {
 }
 
 func (m *model) openCommands(anchor int) {
-	opts := make([]option, 0, len(commands)+len(m.skills))
+	opts := make([]option, 0, len(commands))
 	for _, c := range commands {
 		opts = append(opts, option{label: "/" + c.name, hint: c.help, value: c.name})
 	}
-	// Skills after the built-ins, dimmed: they are the same gesture, but what
-	// they do is load instructions rather than work the UI.
-	for _, c := range m.skills {
-		opts = append(opts, option{label: "/" + c.name, hint: c.help, value: skillPrefix + c.name, tone: cMuted})
-	}
 	m.openOverlay(ovCommands, "command", opts, anchor)
+}
+
+// openSkills puts the $ menu up: the user-invokable skills, typed as "$name "
+// into the message, with the task following them. The anchor is the "$" that
+// opened the menu; choosing replaces it and whatever was typed after it.
+func (m *model) openSkills(anchor int) {
+	opts := make([]option, 0, len(m.skills))
+	for _, c := range m.skills {
+		opts = append(opts, option{label: "$" + c.name, hint: c.help, value: c.name})
+	}
+	m.openOverlay(ovSkills, "skill", opts, anchor)
 }
 
 // runCommand acts on a chosen slash command. The ones the worker owns are sent
@@ -486,17 +491,26 @@ func (m *model) runCommand(name string) {
 		m.quitting = true
 
 	case "permissions":
-		m.askMode = !m.askMode
-		mode := "auto"
-		if m.askMode {
-			mode = "ask"
+		// ask -> auto -> off -> ask. auto hands the calls that would prompt to
+		// a small model, which answers allow or deny with a reason; off never
+		// asks anything.
+		switch m.permMode {
+		case "ask":
+			m.permMode = "auto"
+		case "auto":
+			m.permMode = "off"
+		default:
+			m.permMode = "ask"
 		}
 		if m.sess != nil {
-			m.sess.Command("permission.mode", map[string]any{"mode": mode})
+			m.sess.Command("permission.mode", map[string]any{"mode": m.permMode})
 		}
-		if m.askMode {
+		switch m.permMode {
+		case "ask":
 			m.notice(cGhost, "asking before file and shell calls")
-		} else {
+		case "auto":
+			m.notice(cGhost, "screening tool calls with a small model - flagged calls ask you")
+		case "off":
 			m.notice(cGhost, "running tool calls without asking")
 		}
 
@@ -551,7 +565,7 @@ func (m *model) command(action string, fields map[string]any) {
 
 const helpText = "enter send  ·  esc stop the run  ·  ctrl+b background the running tool call  ·  " +
 	"ctrl+c quit  ·  ctrl+t thinking  ·  tab fold tool calls  ·  shift+tab spell out their arguments  ·  " +
-	"ctrl+o inspect a call in full  ·  / commands  ·  @ files  ·  shift+enter newline  ·  " +
+	"ctrl+o inspect a call in full  ·  / commands  ·  $ skills  ·  @ files  ·  shift+enter newline  ·  " +
 	"↑↓ pgup pgdn scroll"
 
 // openSessions and openProviders turn a worker reply into a picker. The

@@ -19,6 +19,7 @@ const (
 	ovNone overlayKind = iota
 	ovPermission
 	ovCommands
+	ovSkills
 	ovFiles
 	ovSessions
 	ovProviders
@@ -47,6 +48,7 @@ type permRequest struct {
 	diff    string         // ...and the patch, for a write or an edit
 	content string         // ...or the whole file, when it is being created
 	lang    string         // which highlighter the two of those are drawn with
+	flag    string         // why the auto gate wants a person to look, when it does
 	key     string         // what a standing allow is filed under
 	scope   string         // how that standing allow reads on the prompt
 }
@@ -265,6 +267,12 @@ func (m *model) permBodyRows(o *overlay, width int) []string {
 	var head []string
 	if p.summary != "" {
 		head = append(head, margin+"  "+paint(cMuted, trunc(plain(p.summary), width-2)))
+	}
+	// What the gate flagged, when this prompt came through auto mode. It is
+	// why a person is being asked at all, so it sits beside the summary and
+	// above the patch it is a comment on.
+	if p.flag != "" {
+		head = append(head, margin+"  "+paint(cWarn, trunc(plain("flagged: "+p.flag), width-2)))
 	}
 
 	rows := m.permBody(o, width)
@@ -533,7 +541,7 @@ func (m *model) dismissMenu() {
 
 	// A picker opened by a trigger character takes the trigger with it, so an
 	// abandoned "@" does not sit in the message.
-	if (kind == ovFiles || kind == ovCommands) && anchor >= 0 && anchor < len(m.input) {
+	if (kind == ovFiles || kind == ovCommands || kind == ovSkills) && anchor >= 0 && anchor < len(m.input) {
 		m.input = append(m.input[:anchor], m.input[m.cursor:]...)
 		m.cursor = anchor
 	}
@@ -553,19 +561,22 @@ func (m *model) chooseMenu() {
 		m.closeOverlay()
 
 	case ovCommands:
-		// A skill is not a command: it is the opening of a message. The name
-		// stays in the input so the task can be typed after it, and the worker
-		// loads the instructions beside that message when it is sent.
-		if name, ok := strings.CutPrefix(opt.value, skillPrefix); ok {
-			m.input, m.cursor = []rune("/"+name+" "), 0
-			m.cursor = len(m.input)
-			m.closeOverlay()
-			return
+		// The chosen command is a picker, not a message: the "/filter" typed to
+		// reach it comes out of the line, and the rest of the message stays for
+		// after the picker is done with.
+		if anchor := m.ov.anchor; anchor >= 0 && anchor <= len(m.input) {
+			m.input = append(m.input[:anchor], m.input[min(m.cursor, len(m.input)):]...)
+			m.cursor = anchor
 		}
-		// The command is the whole message, so the line goes with the menu.
-		m.input, m.cursor = m.input[:0], 0
 		m.closeOverlay()
 		m.runCommand(opt.value)
+
+	case ovSkills:
+		// A skill is the opening of a message, not a command: "$name " lands
+		// where the "$filter" was, and the task is typed after it. The worker
+		// loads the instructions beside the message when it is sent.
+		m.insertChoice("$" + opt.value)
+		m.closeOverlay()
 
 	case ovSessions:
 		m.clearFilter()
