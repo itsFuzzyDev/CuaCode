@@ -61,7 +61,9 @@ def _pump():
     and reported as "no such app" when asked about directly.
 
     Draining the loop with a zero timeout costs nothing when there is nothing
-    queued, which is the common case.
+    queued, which is the common case. On recent macOS, though, it also turns
+    out never to deliver a launch that arrives while the process is blocked on
+    a socket -- which is why the fallbacks below (_cg_apps) exist.
     """
     ax = _ax()
     if not ax: return
@@ -71,13 +73,53 @@ def _pump():
         pass
 
 
+def _cg_apps() -> dict[str, int]:
+    """{owner name: pid} for every regular app owning a window, per the window server.
+
+    NSWorkspace's list is a notification-fed cache and this process misses the
+    notifications: it has no run loop, and the zero-timeout drain in _pump does
+    not deliver the queued ones either -- so an app launched mid-session was
+    invisible to every lookup here for the worker's whole life, and app_open
+    reported "window not detected" for a window that was plainly on screen.
+    The window server instead answers "who owns a window right now" on demand,
+    no notifications involved. Reconstructed NSRunningApplications answer
+    activationPolicy() live, which is what keeps helper processes that own
+    real windows ("AutoFill (iTerm2)", "Software Update") out of the result.
+    """
+    ax = _ax()
+    if not ax: return {}
+    try:
+        wins = ax.Q.CGWindowListCopyWindowInfo(ax.Q.kCGWindowListOptionAll, ax.Q.kCGNullWindowID)
+    except Exception:
+        return {}
+    candidates = {}
+    for w in wins or []:
+        name = w.get("kCGWindowOwnerName") or ""
+        pid = w.get("kCGWindowOwnerPID")
+        # Layer 0 is a normal window; menu bar items, the Dock and friends sit
+        # above it, and this filter is most of what keeps system UI out.
+        if name and pid is not None and w.get("kCGWindowLayer", 1) == 0:
+            candidates.setdefault(name, pid)
+    out = {}
+    for name, pid in candidates.items():
+        try:
+            ra = ax.AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            if ra is None or ra.activationPolicy() != 0: continue
+            out[name] = pid
+        except Exception:
+            continue
+    return out
+
+
 def _running(name: str):
     """The NSRunningApplication whose name matches, or None.
 
     localizedName is what `System Events` reports as the process name, which is
     what every caller here passes around. The bundle's own name is checked too:
     an app launched by bundle id or by path can be running under a display name
-    the caller never saw.
+    the caller never saw. Neither list is complete for apps launched after this
+    process first looked (see _cg_apps), so a miss falls through to the window
+    server and the handle is rebuilt from the pid.
     """
     ax = _ax()
     if not ax: return None
@@ -87,6 +129,22 @@ def _running(name: str):
         if (app.localizedName() or "").lower() == want: return app
         url = app.bundleURL()
         if url and url.lastPathComponent().rsplit(".", 1)[0].lower() == want: return app
+    pid = next((p for n, p in _cg_apps().items() if n.lower() == want), None)
+    if pid is not None:
+        try:
+            return ax.AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+        except Exception:
+            return None
+    # Bundle basename: the NSWorkspace loop above accepts it, so a miss on the
+    # owner name alone would silently drop apps running under another name.
+    for n, pid in _cg_apps().items():
+        try:
+            ra = ax.AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(pid)
+            url = ra.bundleURL() if ra else None
+            if url and url.lastPathComponent().rsplit(".", 1)[0].lower() == want:
+                return ra
+        except Exception:
+            continue
     return None
 
 
@@ -509,18 +567,25 @@ def gui_apps() -> dict[str, str]:
     would otherwise be reported as newly launched apps forever.
     """
     ax = _ax()
+    out = {}
     if ax:
         try:
             _pump()
-            out = {}
             for app in ax.ws.runningApplications():
                 # NSApplicationActivationPolicyRegular: appears in the Dock.
                 if app.activationPolicy() != 0: continue
                 name = app.localizedName()
                 if name: out[name] = name
-            if out: return out
         except Exception:
-            pass
+            out = {}
+    # The list above stopped growing the first time this process missed a
+    # launch notification (see _cg_apps). Merge what the window server knows
+    # that it does not, or park_new stays blind to every app launched
+    # mid-session -- `firefox &` from the shell, a browser an MCP starts.
+    known = {n.lower() for n in out}
+    for name in _cg_apps():
+        if name.lower() not in known: out[name] = name
+    if out: return out
     rc, out = _osa('tell application "System Events" to get name of every application process '
                    'whose background only is false')
     if rc != 0: return {}
