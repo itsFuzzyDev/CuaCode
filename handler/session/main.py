@@ -198,10 +198,13 @@ class Session:
         self._pending.append({"t": "tool", "ts": store.now_iso(), "name": name, "result": result})
 
     def commit(self):
-        """Append everything recorded since the last commit. Called only at
-        round boundaries, where the conversation is known consistent: an
+        """Append everything recorded since the last commit. Called at round
+        boundaries -- including the top of the next round, not only the end
+        of the turn -- where the conversation is known consistent: an
         assistant turn whose tool_calls have no matching results is rejected
-        on the next request, so it must never reach disk."""
+        on the next request, so it must never reach disk. Committing every
+        round rather than every turn is what caps the damage of a hard kill
+        to the round in flight; the messages before it are already on disk."""
         if not self._pending: return
         out = [self._split(r) for r in self._pending]
         store.append_jsonl(self.dir / "messages.jsonl", out)
