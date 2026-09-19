@@ -21,7 +21,8 @@ PROVIDERS = {
     "openrouter": OpenAI("poolside/laguna-s-2.1:free", "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", vision=False), # if you have money you can use better models.
     "deepseek":   OpenAI("DeepSeek-V4-Flash-Vision-Exp", "https://api.deepseek.com", "DEEPSEEK_API_KEY", vision=True),
     "together":   OpenAI("MiniMaxAI/MiniMax-M3", "https://api.together.xyz/v1", "TOGETHER_API_KEY"),
-    "qubrain":    OpenAI("glm-5.2", "https://qubrain.org/v1", "QB_API_KEY")
+    "qubrain":    OpenAI("glm-5.2", "https://qubrain.org/v1", "QB_API_KEY"),
+    "Synthetic":  OpenAI("hf:zai-org/GLM-5.3-Flash", "https://api.synthetic.new/openai/v1", "SYNTHETIC_API_KEY")
     # You can install local providers (including ollama local, litellm, all as long as they follow OpenAI schema )
     #- the Ollama class though is set to CLOUD ONLY, if youd like to set ollama local or local models you can use openai schema on the localhost )
 }
