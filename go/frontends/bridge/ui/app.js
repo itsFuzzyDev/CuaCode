@@ -33,6 +33,7 @@ const closed = new Set();  // ids closed this window: their late batches are dro
 let showThink = false;  // view prefs, shared across sessions
 let foldCalls = false;
 let PROJECT = '';       // the directory the app works on, off the first batch
+let SKILLS = [];        // user-invokable skills, for $[ completion (skill.list reply)
 
 function newSession(id) {
   return {
@@ -1293,6 +1294,15 @@ function fold(ev, loading) {
       break;
     }
 
+    // The user-invokable skills, one reply to the skill.list asked at startup.
+    // Not a feed row: this feeds $[ completion (see the input section), so it
+    // is dropped rather than drawn.
+    case 'skills':
+      SKILLS = ((ev.data && ev.data.skills) || []).map(s => ({
+        name: String(s.name || ''), description: String(s.description || '') }));
+      refreshSkillMenu();
+      break;
+
     // Mid-run readings. Nothing goes in the feed for either - the status bar
     // already moved - but they carry what the round's thinking is costing, and
     // the thinking they are pricing is on screen above.
@@ -1900,14 +1910,101 @@ async function askClipboard() {
 input.addEventListener('input', () => {
   input.style.height = 'auto';
   input.style.height = input.scrollHeight + 'px';
+  refreshSkillMenu();
+});
+// A caret move (an arrow key, a click) does not fire 'input'; a jump into or
+// out of a "$[" still has to move the completion menu.
+document.addEventListener('selectionchange', () => {
+  if (!skillMenu.hidden) refreshSkillMenu();
 });
 
 input.addEventListener('keydown', e => {
+  // While the $[ menu is up the arrow keys steer it and Enter/Tab/Escape
+  // choose or close it, all before anything is sent.
+  if (!skillMenu.hidden) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); skillMove(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); skillMove(-1); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); skillPick(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); hideSkillMenu(); return; }
+    if (e.key.length === 1) refreshSkillMenu();
+  }
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
     send();
   }
 });
+input.addEventListener('blur', hideSkillMenu);
+
+// ----------------------------------------------------- $skill completion
+//
+// Typing "$" opens a small menu of the skills the worker listed at startup
+// (skill.list). Each keystroke filters it to the partial name, and Enter, Tab
+// or a click writes "$name " and closes. Anything else -- an unknown prefix,
+// a space after the name, no skills installed -- leaves the text alone, so an
+// uncompleted "$" is never mangled.
+const skillMenu = document.createElement('div');
+skillMenu.className = 'skill-menu';
+skillMenu.hidden = true;
+document.querySelector('.bar').insertBefore(skillMenu, document.querySelector('.entry'));
+let skillOpen = -1;   // index of the "$" being completed, or -1 when closed
+let skillRows = [];   // the candidates currently listed (a slice of SKILLS)
+let skillIdx = 0;
+
+function hideSkillMenu() { skillMenu.hidden = true; skillOpen = -1; skillRows = []; }
+
+function refreshSkillMenu() {
+  const c = input.selectionStart;
+  const v = input.value;
+  const open = c > 0 ? v.lastIndexOf('$', c - 1) : -1;
+  // The "$" must start a word (start of line, or after whitespace), and the
+  // partial between it and the caret must still be a name: a space closes it.
+  if (open < 0 || (open > 0 && !/\s/.test(v[open - 1])) || !SKILLS.length) {
+    hideSkillMenu();
+    return;
+  }
+  const prefix = v.slice(open + 1, c);
+  if (!/^[\w-]*$/.test(prefix)) { hideSkillMenu(); return; }
+  skillRows = SKILLS.filter(s => s.name.toLowerCase().startsWith(prefix.toLowerCase())).slice(0, 50);
+  if (!skillRows.length) { hideSkillMenu(); return; }
+  skillIdx = 0;
+  skillMenu.replaceChildren(...skillRows.map((s, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = s.name;
+    b.title = s.description || '';
+    b.className = 'skill-opt' + (i === 0 ? ' sel' : '');
+    b.addEventListener('click', () => { skillIdx = i; skillPick(); });
+    b.addEventListener('mousemove', () => { skillIdx = i; paintSkill(); });
+    return b;
+  }));
+  skillOpen = open;
+  skillMenu.hidden = false;
+}
+
+function paintSkill() {
+  [...skillMenu.children].forEach((el, i) => el.classList.toggle('sel', i === skillIdx));
+}
+
+function skillMove(d) {
+  if (!skillRows.length) return;
+  skillIdx = (skillIdx + d + skillRows.length) % skillRows.length;
+  paintSkill();
+}
+
+function skillPick() {
+  const name = skillRows[skillIdx] && skillRows[skillIdx].name;
+  if (!name) { hideSkillMenu(); return; }
+  const v = input.value;
+  // Replace the "$" and the partial between it and the caret; the space
+  // after the name is what ends it, so the task can follow.
+  input.value = v.slice(0, skillOpen) + '$' + name + ' ' + v.slice(input.selectionStart);
+  input.style.height = 'auto';
+  input.style.height = input.scrollHeight + 'px';
+  const pos = skillOpen + name.length + 2;
+  hideSkillMenu();
+  input.setSelectionRange(pos, pos);
+  input.focus();
+}
 
 document.addEventListener('keydown', e => {
   const ctrl = e.ctrlKey || e.metaKey;
@@ -1936,6 +2033,7 @@ document.addEventListener('keydown', e => {
 });
 
 function send() {
+  hideSkillMenu();
   const text = input.value.trim();
   // A message that is nothing but a picture is a message: drop a screenshot in,
   // press enter.
@@ -2458,4 +2556,5 @@ if (location.search.includes('demo')) {
   // are painted fake above, and there are no bindings to ask anyway.
   go('goCommand', 'session.list', null);
   go('goCommand', 'project.list', null);
+  go('goCommand', 'skill.list', null);   // for $[ completion in the input
 }
