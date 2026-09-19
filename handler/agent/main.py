@@ -235,6 +235,35 @@ def _needs_ask(tool, args: dict, ctx) -> bool:
     try: return not fn(args, ctx)
     except Exception: return True
 
+def _tail(messages, limit: int = 6) -> str:
+    """The recent turns, rendered for a permission gate.
+
+    `messages` is provider-dialect: text is a string on some providers and a
+    list of blocks on others, so extract rather than assume. Tool calls
+    collapse to their name -- the gate wants to know why a call is happening,
+    not the megabytes an earlier one might have returned.
+    """
+    def text_of(c):
+        if isinstance(c, str): return c or ""
+        if isinstance(c, list):
+            out = []
+            for b in c:
+                if isinstance(b, dict):
+                    if b.get("type") == "text": out.append(b.get("text") or "")
+                    elif b.get("type") == "tool_use":
+                        out.append("[tool: %s]" % (b.get("name") or "?"))
+                elif isinstance(b, str): out.append(b)
+            return " ".join(x for x in out if x)
+        return ""
+
+    parts = []
+    for m in messages[-limit:]:
+        role = m.get("role")
+        if role not in ("user", "assistant"): continue
+        t = text_of(m.get("content"))
+        if t: parts.append("%s: %s" % (role, t[:400]))
+    return "\n\n".join(parts)[:3000]
+
 def _call_fn(reg: dict, name: str, args: dict, ctx, token: interrupt.Token):
     """The dispatch, with everything bound now rather than when the thread gets
     around to it.
@@ -393,7 +422,7 @@ def _rate(phase: str, think_chars: int, reply_chars: int,
             "tps": round(tokens / secs, 1) if secs >= 0.2 else 0.0}
 
 def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, settings: dict = None,
-             system="", cancelled=None, ask=None, allow: list = None, extra: dict = None,
+             system="", cancelled=None, ask=None, auto=None, allow: list = None, extra: dict = None,
              provider_obj=None, detach=None, steer=None):
     """The agent loop. Also the subagent loop -- the last three arguments are
     the whole difference.
@@ -691,9 +720,27 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
             wants_bg = bool(args.pop("background", False)) and getattr(tool, "backgroundable", False)
             token = interrupt.Token()
             fn = _call_fn(reg, call.name, args, ctx, token)
-            if ask is not None and tool is not None and _needs_ask(tool, args, ctx) \
-                    and not ask(call.name, args, _preview(tool, args, ctx)):
-                result = {"error": "denied by the user"}
+            # A call can be gated three ways: the user (ask), a model that
+            # screens it first (auto), or not at all. Auto is a net, not a
+            # verdict: a call the gate flags still goes to the user, with the
+            # reason riding the prompt -- the gate's job is catching what
+            # deserves a look, not having the last word. Only when nobody can
+            # be asked does the flag refuse. A refusal is reported as a failed
+            # call -- the assistant message already holds these calls.
+            needed = tool is not None and _needs_ask(tool, args, ctx)
+            denied = None
+            if needed and auto is not None:
+                allow, reason = auto(tool, call.name, args, _preview(tool, args, ctx),
+                                     _tail(messages), ctx)
+                if not allow:
+                    if ask is not None and not ask(call.name, args, _preview(tool, args, ctx), reason):
+                        denied = "denied by the user"
+                    elif ask is None:
+                        denied = "denied by the permission model: %s" % reason
+            elif needed and ask is not None and not ask(call.name, args, _preview(tool, args, ctx)):
+                denied = "denied by the user"
+            if denied:
+                result = {"error": denied}
             elif wants_bg:
                 # Never asked, never waited on: the job starts and the round
                 # moves on. Permission is still asked above first, because a

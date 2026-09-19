@@ -95,6 +95,33 @@ def set_default_effort(level: str) -> dict:
     cfg["effort"] = level
     return save(cfg)
 
+def permission_mode(cfg: dict = None) -> str:
+    """Which of ask | auto | off governs tool permission prompts.
+
+    ask is default: the user decides each call that needs one. auto hands the
+    calls that would prompt to a small model (see permission_decider); off
+    never asks anything. Unknown values land on ask, the safe read.
+    """
+    p = (cfg or load()).get("permission")
+    if isinstance(p, dict):
+        mode = (p.get("mode") or "ask").strip().lower()
+    else:
+        mode = (p or "ask").strip().lower()
+    return mode if mode in ("ask", "auto", "off") else "ask"
+
+def permission_decider(cfg: dict = None) -> tuple:
+    """(provider, model) named to decide tool calls in auto mode.
+
+    ("", "") to inherit the active provider's own model. Same shape as
+    vision_helper, and for the same reason: the conversation may run on one
+    model while a small one does the deciding.
+
+        "permission": {"mode": "auto", "provider": "ollama", "model": "gemma4:31b"}
+    """
+    p = (cfg or load()).get("permission")
+    if not isinstance(p, dict): return "", ""
+    return (p.get("provider") or "").strip(), (p.get("model") or "").strip()
+
 def api_key(name: str, cfg: dict = None) -> str:
     """Environment wins over the file, so a shell can override a stored key
     without editing anything.
