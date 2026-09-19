@@ -785,6 +785,30 @@ body.native .brand { padding: 17px 16px 11px 96px; }
 }
 #input::placeholder { color: var(--ink-mute); opacity: 0.55; }
 
+/* The $[ completion strip, above the prompt and in the same visual row the tray
+   occupies when there is one. Hidden has to beat the flex below it, hence the
+   explicit [hidden] rule. */
+.skill-menu {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 2px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.skill-menu[hidden] { display: none; }
+.skill-opt {
+  appearance: none;
+  font: 11px/1.3 var(--mono);
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.skill-opt:hover, .skill-opt.sel { border-color: var(--accent); color: var(--accent); }
+
 /* ====================================================== what is attached */
 
 /* The tray sits between the status line and the prompt, because that is the

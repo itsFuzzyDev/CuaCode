@@ -19,6 +19,7 @@ startup, whole, every conversation. That costs their full length on every
 request -- which is the trade, made deliberately, for a handful of skills rather
 than for fifty.
 """
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -139,7 +140,7 @@ def get(name: str, scope: str = None) -> Skill:
     return found[name]
 
 # --------------------------------------------------------------------------
-# user invocation: /<name> typed in a frontend
+# user invocation: $<name> typed in a frontend
 
 def listing(scope: str = "user") -> list:
     """Name and description of every skill `scope` may load, for a picker."""
@@ -147,26 +148,43 @@ def listing(scope: str = "user") -> list:
             for _, s in sorted(load_skills(scope=scope).items())]
 
 def invocation(text: str) -> str:
-    """The block for a user message that opens with `/<skill>`, or "".
+    """The skill block(s) a user message asked for, or "" when none is named.
 
-    The user's own line is left alone -- it is what they typed, and the records
-    are what the conversation was -- so the instructions ride alongside it the
-    way recall and project docs do. Anything typed after the name is the user's
-    task, already in the message, so it is not repeated here.
+    A skill is named with `$name` anywhere in the text -- "polish this with
+    $unslop" loads it mid-message -- or `/<name>` opening the message, which
+    is what older frontends wrote for you. Each body rides beside the message
+    the way recall and project docs do, and the user's own line is left alone
+    -- it is what they typed, and the records are what the conversation was.
     """
-    line = (text or "").lstrip()
-    if not line.startswith("/"): return ""
-    name = line[1:].split(None, 1)[0].strip() if len(line) > 1 else ""
-    if not name: return ""
-    try: s = get(name, scope="user")
-    except ValueError: return ""
-    return (f"skill loaded: {s.name}\n\n"
-            f"<skill name=\"{s.name}\" dir=\"{s.path}\">\n"
-            "The user asked for this skill by name. These are its instructions;\n"
-            "follow them for the message it came with.\n\n"
-            f"{s.body}\n"
-            + (f"\nFiles next to it, on disk, unread: {', '.join(s.files)}\n" if s.files else "")
-            + "</skill>")
+    names = []
+    text = text or ""
+    line = text.lstrip()
+    if line.startswith("/") and len(line) > 1:
+        if n := line[1:].split(None, 1)[0].strip():
+            names.append(n)
+    # $skill anywhere in the message: a "$" that starts a word, then name
+    # characters. A dollar amount ("$5") looks up a skill called "5", finds
+    # none, and stays prose.
+    for m in re.finditer(r"(?<!\S)\$([\w-]+)", text):
+        names.append(m.group(1))
+    # One block per unique skill that actually exists, in the order asked.
+    blocks, seen = [], set()
+    for n in names:
+        if n in seen:
+            continue
+        seen.add(n)
+        try:
+            s = get(n, scope="user")
+        except ValueError:
+            continue
+        blocks.append(f"skill loaded: {s.name}\n\n"
+                      f"<skill name=\"{s.name}\" dir=\"{s.path}\">\n"
+                      "The user asked for this skill by name. These are its instructions;\n"
+                      "follow them for the message it came with.\n\n"
+                      f"{s.body}\n"
+                      + (f"\nFiles next to it, on disk, unread: {', '.join(s.files)}\n" if s.files else "")
+                      + "</skill>")
+    return "\n\n".join(blocks)
 
 
 # --------------------------------------------------------------------------

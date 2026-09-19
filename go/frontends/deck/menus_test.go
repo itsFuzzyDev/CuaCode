@@ -152,8 +152,8 @@ func TestPermissionQueue(t *testing.T) {
 	}
 }
 
-// TestSkillPalette covers the other half of the palette: skills the worker
-// listed, which open a message rather than running a command.
+// TestSkillPalette covers the $ menu: skills the worker listed, which open a
+// message rather than running a command.
 func TestSkillPalette(t *testing.T) {
 	m := initialModel()
 	m.width, m.height = 80, 24
@@ -162,23 +162,26 @@ func TestSkillPalette(t *testing.T) {
 		t.Fatalf("skill row is %+v", m.skills)
 	}
 
-	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	m.Update(tea.KeyPressMsg{Code: '$', Text: "$"})
+	if !m.overlayActive() || m.ov.kind != ovSkills {
+		t.Fatal("$ did not open the skill menu")
+	}
 	for _, r := range "unsl" {
 		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	opt, ok := m.ov.selected()
-	if !ok || opt.value != skillPrefix+"unslop" {
+	if !ok || opt.value != "unslop" {
 		t.Fatalf("filter %q selected %q, want the skill", m.ov.filter, opt.value)
 	}
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.overlayActive() {
-		t.Error("palette still open after choosing a skill")
+		t.Error("menu still open after choosing a skill")
 	}
-	// The name stays put: a skill is the opening of a message, not a command
-	// that has already run.
-	if got := string(m.input); got != "/unslop " {
-		t.Errorf("input is %q, want %q", got, "/unslop ")
+	// The name lands where the "$filter" was: a skill is the opening of a
+	// message, not a command that has already run.
+	if got := string(m.input); got != "$unslop " {
+		t.Errorf("input is %q, want %q", got, "$unslop ")
 	}
 	if m.cursor != len(m.input) {
 		t.Errorf("cursor at %d, want %d", m.cursor, len(m.input))
@@ -211,12 +214,27 @@ func TestSlashCommands(t *testing.T) {
 		t.Errorf("command left %q in the input", string(m.input))
 	}
 
-	// A slash mid-sentence is just a slash.
-	for _, r := range "a/b" {
+	// A slash after a space opens the palette mid-line; glued to a word it
+	// stays text, so paths and emails are never hijacked.
+	for _, r := range "a " {
 		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !m.overlayActive() || m.ov.kind != ovCommands {
+		t.Error("/ after a space did not open the palette")
+	}
+	m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.overlayActive() {
-		t.Error("/ opened the palette mid-word")
+		t.Error("esc did not close the palette")
+	}
+	if got := string(m.input); got != "a " {
+		t.Errorf("esc left %q in the input, want the line minus the trigger and filter", got)
+	}
+	m.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if m.overlayActive() {
+		t.Error("/ glued to a word opened the palette")
 	}
 }
 
