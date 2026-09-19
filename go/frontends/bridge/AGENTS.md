@@ -224,7 +224,7 @@ ui/app.js          block model, fold(), rendering, the project tree, tool decodi
 ui/fixture.js      the scripted conversations ?demo replays
 ```
 
-The sidebar carries the app's own chrome: the wordmark and pill, a collapse
+The sidebar carries the app's own chrome: the wordmark, a collapse
 chevron, a search row (opens the palette), and the project tree - projects
 from each session's own spawn directory and the store's `cwd`s, filtered to
 the promoted projects (projects.json), the current cwd, and live sessions -

@@ -13,7 +13,7 @@
      the separating. Nothing here is pure black; nothing here is warm. */
   --bg:      #181818;  /* canvas */
   --surface: #1b1b1b;  /* the sidebar, code, chips */
-  --raised:  #1c1c1c;  /* a resting tile, a pill */
+  --raised:  #1c1c1c;  /* a resting tile */
   --lit:     #232323;  /* what is being used right now */
   --edge:    #262626;  /* every hairline and border */
 
@@ -78,7 +78,7 @@ body {
    titlebar_darwin.go) span to ~83px, and AppKit paints over the page - a
    narrower rail clips them. */
 .side.rail { width: 88px; }
-.side.rail .brand-word, .side.rail .pill,
+.side.rail .brand-word,
 .side.rail .secthead { display: none; }
 .side.rail .brand { padding: 12px 0 10px; justify-content: center; }
 /* Native lights park over the rail's top: the brand row becomes the lights
@@ -251,17 +251,6 @@ body.native .brand { padding: 17px 16px 11px 96px; }
 .brand-word em {
   font-style: normal;
   color: var(--ink-dim);
-}
-
-.pill {
-  font: 600 10px/1 var(--ui);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-  background: var(--raised);
-  border: 1px solid var(--edge);
-  border-radius: 4px;
-  padding: 4px 8px 3px;
 }
 
 /* --------------------------------------------------- search and section head */
@@ -632,7 +621,7 @@ body.native .brand { padding: 17px 16px 11px 96px; }
    the first name lands. */
 .top .name.empty { color: var(--ink-mute); }
 
-/* The project tag, the same voice as the brand's pill a step smaller. */
+/* The project tag, a step smaller than a label on the brand row. */
 .top .tag {
   flex: none;
   font: 600 10.5px/1 var(--ui);
