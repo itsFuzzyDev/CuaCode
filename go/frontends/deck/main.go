@@ -16,6 +16,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -74,7 +75,7 @@ type model struct {
 	ov            overlay           // the menu on screen, if any
 	permQueue     []permRequest     // worker questions waiting their turn
 	permPolicy    map[string]string // standing answers, by tool name
-	askMode       bool              // whether the worker asks before tool calls
+	permMode      string            // how tool calls are gated: ask, auto, off
 	pickVision    bool              // the next providers reply opens the vision picker, not the provider one
 	pickParams    bool              // ...or the params editor for the current model
 	probing       bool              // the next providers reply opens nothing: the startup read, or the echo of a change just made
@@ -111,7 +112,8 @@ func initialModel() *model {
 		// Believed until a listing says otherwise: a rung greyed out on a
 		// guess is worse than one that turns out to have been refusable.
 		effortOff: true,
-		askMode:   true, // asking is the default; /permissions turns it off
+		// Asking is the default; /permissions cycles ask, auto, off.
+		permMode:  "ask",
 	}
 	m.push(&block{kind: kHint})
 	return m
@@ -274,6 +276,21 @@ func (m *model) quit() (tea.Model, tea.Cmd) {
 	return m, tea.Sequence(tea.Raw(ansi.SetIconName("")), tea.Quit)
 }
 
+// atWordStart reports whether idx sits where a word could begin: the start of
+// the input, or right after whitespace. The trigger characters only fire
+// there, so "@" inside an email, "/" inside a path and the "$" in "$5" are
+// text rather than completions.
+func (m *model) atWordStart(idx int) bool {
+	if idx <= 0 || idx > len(m.input) {
+		return idx == 0
+	}
+	switch m.input[idx-1] {
+	case ' ', '\t', '\n':
+		return true
+	}
+	return false
+}
+
 // send puts a message on the wire and echoes it into the feed.
 //
 // Typed while a run is going it is a mid-turn message, not the next turn: the
@@ -335,13 +352,24 @@ func (m *model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch {
-	case msg.Code == '/' && len(m.input) == 0:
+	case msg.Code == '/' && m.atWordStart(m.cursor):
+		// The trigger fires where a word could start, not inside one: typing
+		// it after a space opens the palette anchored at the '/', the way '@'
+		// is anchored at the '@'. A path like src/main.go or an email stays
+		// text, and Esc takes an opened menu's trigger back out.
 		m.insert('/')
-		m.openCommands(0)
+		m.openCommands(m.cursor - 1)
 
-	case msg.Code == '@':
+	case msg.Code == '$' && m.atWordStart(m.cursor):
+		// Skills live behind their own trigger, where they are invoked:
+		// choosing one writes "$name " over the "$filter" that was typed.
+		m.insert('$')
+		m.openSkills(m.cursor - 1)
+
+	case msg.Code == '@' && m.atWordStart(m.cursor):
 		// The anchor is the trigger itself: choosing a file replaces the "@"
-		// and whatever was typed after it, rather than appending to it.
+		// and whatever was typed after it, rather than appending to it. Glued
+		// to a word it is just an at-sign -- boaz@example.com stays an email.
 		m.insert('@')
 		m.openFiles(m.cursor - 1)
 
@@ -648,12 +676,23 @@ func (m *model) handleSessionEvent(ev session.Event) tea.Cmd {
 		// Envelopes addressed to the frontend rather than to the feed: a
 		// question the worker is blocked on, or the answer to something a menu
 		// asked for.
-		// The worker only asks frontends that have said they answer, so the
-		// mode is (re)declared every time it comes up.
+		// The worker gates calls however the deck last declared, so the mode
+		// is (re)declared every time it comes up.
 		if s := ev.Parsed.State; s == "ready" || s == "startup" {
-			if m.askMode {
-				m.command("permission.mode", map[string]any{"mode": "ask"})
+			// The worker boots on whatever config.json's permission block
+			// says, and announces it on ready. Adopt it before declaring:
+			// /permissions then cycles from where config left this, not
+			// from ask, and an auto in config survives a restart.
+			var boot struct {
+				Mode string `json:"mode"`
 			}
+			_ = json.Unmarshal(ev.Parsed.Data, &boot)
+			if boot.Mode != "" {
+				m.permMode = boot.Mode
+			}
+			// Sent whatever the mode: at boot the worker assumes ask, and
+			// the deck is the one that knows where the user left it.
+			m.command("permission.mode", map[string]any{"mode": m.permMode})
 			// Who is answering is on the status bar from the first frame, not
 			// from the first time a picker is opened. The reply to this one is
 			// read and dropped rather than shown.
@@ -933,11 +972,9 @@ func main() {
 	defer sess.Close()
 
 	// Declared here rather than on the worker's first "ready" line: that line
-	// can arrive before this assignment, and the worker only asks frontends
-	// that have said they answer. Missing it means never being asked at all.
-	if m.askMode {
-		sess.Command("permission.mode", map[string]any{"mode": "ask"})
-	}
+	// can arrive before this assignment, and the worker runs whatever mode the
+	// deck declares. Missing it means running on the worker's default instead.
+	sess.Command("permission.mode", map[string]any{"mode": m.permMode})
 
 	// Asked for before the loop starts, so the picker is already up - or the
 	// conversation already replaying - by the time the first frame is drawn.
