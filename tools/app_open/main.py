@@ -20,7 +20,7 @@ def run(args: dict, ctx) -> dict:
     handle = m.open_app(app)
     if not handle:
         return {"ok": True, "app": app, "snapped": False, "self_snapped": self_snapped,
-                "note": "app opened but window not detected within 5s"}
+                "note": "app opened but no window was detected in time; not snapped"}
 
     # The one snap that raises: the agent is about to drive this app, so it
     # has to end the call holding keyboard focus.
