@@ -19,11 +19,28 @@ this only decides what in the text is a command and what a command needs.
 """
 from dataclasses import dataclass
 
-# The known commands, and which of them must precede generation. A command not
-# in BLOCKING is parallel by definition, and one not in _ALL is not a command
-# at all -- it is a path, a URL, a date, prose with a slash in it.
-_ALL = frozenset(("provider", "model", "vision", "effort", "context", "usage"))
-_BLOCKING = frozenset(("provider", "model", "vision", "effort"))
+# The commands, in the order a menu should list them: name, what it does, and
+# whether it must run before the request goes out. One not in BLOCKING is
+# parallel by definition, and one not in this table is not a command at all --
+# it is a path, a URL, a date, prose with a slash in it. The description is the
+# frontend's `/` menu, so a command added here reaches the parser and the menu
+# in the same edit, and a frontend never carries a second copy of the list.
+COMMANDS = (
+    ("provider", "which provider answers, from here on", True),
+    ("model",    "which model that provider runs", True),
+    ("vision",   "which provider looks at pictures", True),
+    ("effort",   "how hard it thinks: off low medium high max", True),
+    ("context",  "how much of the window the conversation fills", False),
+    ("usage",    "what this and every other session has cost", False),
+)
+
+_ALL = frozenset(name for name, _, _ in COMMANDS)
+_BLOCKING = frozenset(name for name, _, blocking in COMMANDS if blocking)
+
+
+def listing() -> list:
+    """Every inline command, for a frontend drawing a `/` menu."""
+    return [{"name": name, "description": desc} for name, desc, _ in COMMANDS]
 
 
 @dataclass
@@ -81,6 +98,11 @@ if __name__ == "__main__":
     # One runnable check: the smallest thing that fails if the parser breaks.
     def names(res):
         return [(n, a) for n, a in res.blocking] + [(n, a) for n, a in res.parallel]
+
+    # The menu is not a second copy of the table: every command the parser
+    # knows is one the frontend can list.
+    assert {c["name"] for c in listing()} == _ALL
+    assert all(c["description"] for c in listing())
 
     r = parse("explain X then /provider fr now")
     assert names(r) == [("provider", "fr")] and "fr" not in r.text
