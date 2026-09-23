@@ -17,6 +17,19 @@ fi
 
 mkdir -p bin
 
+# cgo links against whichever SDK clang resolves for itself, and that is the
+# last one the Command Line Tools installed - which can be newer than the linker
+# the selected Xcode ships. When it is, the link dies on an architecture token
+# in the .tbd files (arm64e.x1-macos) that this ld does not know, and the error
+# reads as though the Go code were at fault. Pin the build to the SDK belonging
+# to the active developer directory instead. An SDKROOT the caller set is their
+# call and is left alone; on a machine without xcrun this is a no-op.
+if [ -z "${SDKROOT:-}" ]; then
+    if sdk="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)" && [ -n "$sdk" ]; then
+        export SDKROOT="$sdk"
+    fi
+fi
+
 keep_going=0
 args=()
 for arg in "$@"; do

@@ -334,6 +334,36 @@ def _run_inline(name, arg) -> str:
     return None
 
 
+def fs_listing(root: str, sub: str = "") -> dict:
+    """One directory, listed, for a frontend's `@` menu.
+
+    Relative to the session's own directory and never above it: the menu is
+    completing a path the agent will be asked to read, so `..` and an absolute
+    path come back empty rather than as a window onto the disk. Hidden entries
+    stay out for the same reason they stay out of any other file picker, and
+    directories sort first because typing `@` is usually the start of a walk.
+    """
+    base = os.path.realpath(root or os.getcwd())
+    rel = (sub or "").strip().rstrip("/")
+    if rel.startswith("/") or ".." in rel.split("/"):
+        return {"dir": rel, "entries": []}
+    target = os.path.realpath(os.path.join(base, rel))
+    if target != base and not target.startswith(base + os.sep):
+        return {"dir": rel, "entries": []}
+    try:
+        names = os.listdir(target)
+    except OSError:
+        return {"dir": rel, "entries": []}
+    entries = []
+    for n in names:
+        if n.startswith("."):
+            continue
+        entries.append({"name": n, "dir": os.path.isdir(os.path.join(target, n)),
+                        "path": (rel + "/" + n) if rel else n})
+    entries.sort(key=lambda e: (not e["dir"], e["name"].lower()))
+    return {"dir": rel, "entries": entries[:200]}
+
+
 while True:
     # The frontend is gone: pipe EOF or reparented to launchd, so exit rather
     # than poll an empty inbox forever. Mirrors `stop`: background work asked
@@ -443,6 +473,20 @@ while True:
                 ipc.reply(env, "skills", {"skills": skills.listing("user")})
             except Exception as e:
                 ipc.reply(env, "status", {"state": "error", "error": str(e)})
+
+        elif action == "command.list":
+            # The `/` menu: the inline commands, read off the parser's own
+            # table. Nothing to keep in sync -- the worker already knows which
+            # commands it routes, so this is a read of what it would act on.
+            ipc.reply(env, "commands", {"commands": inline.listing()})
+
+        elif action == "fs.list":
+            # The `@` menu: one directory of this conversation's own tree. The
+            # root is the session's cwd and not wherever this process happens
+            # to sit, because the path lands in a message the agent will read
+            # from the session's directory.
+            root = sess.meta.get("cwd") or ctx.get("cwd") or os.getcwd()
+            ipc.reply(env, "files", fs_listing(root, env.data.get("dir", "")))
 
         elif action == "session.list":
             ipc.reply(env, "sessions", {"sessions": store.list_sessions(), "active": sess.id})

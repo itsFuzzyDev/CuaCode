@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+<title>Pane</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- The top bar. Vector paths are the design's own, out of the Figma file, with
+       their colours swapped for currentColor so app.css owns the ink. Sizes are the
+       design's proportions at a fixed 18px mark: 18 x 19.1, and the arrows 10.2
+       high. The arrows carry stroke 4 where the design has 3, which is 1px at this
+       size rather than 0.8px, so the bar reads as one weight. -->
+  <header id="bar">
+    <button class="tb" id="tb-pane" aria-label="Toggle sidebar">
+      <svg width="19.1" height="18" viewBox="0 0 71 67" fill="none" aria-hidden="true">
+        <path d="M61.5556 2H9.44444C5.33299 2 2 5.13401 2 9V58C2 61.866 5.33299 65 9.44444 65H61.5556C65.667 65 69 61.866 69 58V9C69 5.13401 65.667 2 61.5556 2Z"
+              stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M23.125 2.375V64.625" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </header>
+  <div id="app"></div>
+  <div id="drag"></div>
+  <script src="app.js"></script>
+</body>
+</html>
