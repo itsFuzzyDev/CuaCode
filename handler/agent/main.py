@@ -110,6 +110,35 @@ def _status_of(e) -> int:
     return int(m.group(1)) if m else 0
 
 
+# What a provider says when the prompt did not fit, beyond the 413 that spells it
+# unambiguously. The openai dialect answers 400 with a context_length_exceeded body
+# at least as often as it answers 413, and a fold is the only thing that recovers
+# from either.
+_OVERFLOW_WORDS = ("context length", "context_length", "maximum context", "context window",
+                   "context size", "too many tokens", "prompt is too long",
+                   "input is too long", "request too large", "exceeds the maximum")
+
+
+def _overflow(e) -> bool:
+    """Whether a refusal means the prompt did not fit the window.
+
+    Was `_status_of(e) == 413`, which is the obvious spelling and not the common
+    one: a provider that answers 400 here lands in _FINAL_CODES and is raised, so
+    the fold that answers it never runs and a long conversation simply ends with
+    an out-of-context error and nothing else.
+
+    Text-matched on a 400/422 rather than on the code alone, and deliberately not
+    429: several endpoints spend 429 on quota rather than on the request, and
+    folding a conversation for a quota refusal throws away context to answer the
+    wrong question.
+    """
+    code = _status_of(e)
+    if code == 413: return True
+    if code not in (400, 422): return False
+    text = str(e).lower()
+    return any(w in text for w in _OVERFLOW_WORDS)
+
+
 def _transient(e) -> bool:
     """Whether the network is at fault rather than the request. A request never
     delivered costs nothing to send again; one the provider read and refused will
@@ -472,6 +501,19 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         nonlocal waiting
         if peer_sid and not waiting: waiting = peers.drain(peer_sid)
 
+    def full_prompt() -> int:
+        """What the window is actually full of: history plus everything re-sent beside it.
+
+        The ceiling the provider enforces counts the system segment, the user's
+        AGENTS.md, the tool schemas and the environment block as well as the
+        history -- all of it goes up with every round. Measuring only `messages`
+        put the trigger that far past the line, so a limit written near the window
+        could never fire: the provider refused first, every time.
+        """
+        statics = system if isinstance(system, list) else ([system] if system else [])
+        return (compact.tokens(messages) + compact.tokens(statics)
+                + compact.tokens(tools or []))
+
     while True:
         # Rollback point for this round. A cancel rewinds to here: an assistant
         # message whose tool_calls have no results is rejected. Earlier rounds stay.
@@ -479,7 +521,11 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         yield {"type": "round"}
         thinking, content, calls, last = "", "", [], None
         # Carried before the clear: the provider's own count beats any estimate of ours.
-        measured = int((usage or {}).get("in") or 0) or measured
+        # "input", not "in": usage_of() names the whole prompt that way, and stamp()
+        # is what renames it, one layer later. Read as "in" this was always zero, so
+        # the provider's own count was discarded every round and the trigger had
+        # nothing but the character estimate to decide on.
+        measured = int((usage or {}).get("input") or 0) or measured
         # Per round, not per run: the count on the next request already includes
         # everything this one added, so old numbers would only be a stale round's.
         usage = {}
@@ -503,8 +549,9 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
         limit = compact.trigger(settings)
         if limit:
             # The larger of the two: measured is exact but a round old, the estimate
-            # covers what has been appended since.
-            used = max(measured, compact.tokens(messages))
+            # covers what has been appended since. Both sides count the whole prompt,
+            # so a count in config means the same thing on either side.
+            used = max(measured, full_prompt())
             folded = _compact_now(messages, used, limit, ctx=ctx)
             if folded: measured = 0        # it described a history that no longer exists
             # Both halves of the fold go out before the notice: start, then done,
@@ -548,8 +595,8 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
             # refused at 90k that folds to 73k is still refused. So it folds again, as
             # long as each fold is still freeing something. MAX_FOLDS is the backstop
             # against a fold that frees nothing looping forever.
-            if _status_of(payload) == 413 and folds < MAX_FOLDS:
-                before = max(measured, compact.tokens(messages))
+            if _overflow(payload) and folds < MAX_FOLDS:
+                before = max(measured, full_prompt())
                 if folds == 0:
                     yield {"type": "notice", "text": "over the window: compressing before retrying",
                            "compacted": True}
@@ -561,7 +608,7 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
                 outbox.clear()
                 folds += 1
                 measured = 0
-                after = compact.tokens(messages)
+                after = full_prompt()
                 # Progress is the only reason to go round again. A fold that frees
                 # nothing would ask the same provider the same question forever.
                 if after < before:
