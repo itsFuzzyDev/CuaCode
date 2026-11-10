@@ -17,10 +17,11 @@ path = "src/bin/cuacode-doctor.rs"
 # and neither is built into it -- the terminal one must not link a GUI
 # framework, and a GUI must not link a terminal library.
 [workspace]
-members = ["fastrs", "quik", "gui"]
-# The vendored zeron tree is its own workspace; without this cargo tries to make
-# every crate under `zeron/` inherit this root, which has no `workspace.package`.
-exclude = ["zeron"]
+members = ["fastrs", "quik"]
+# Two trees live here and are local: the zeron checkout, and the viewport over it.
+# Neither is part of this repository, so neither is part of its workspace -- a
+# checkout without them has to resolve and build. Both are in .gitignore.
+exclude = ["zeron", "gui"]
 
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
@@ -42,14 +43,6 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Securit
 debug = "line-tables-only"
 
 # GPUI is slow unoptimized even in a debug build of the app itself, which makes
-# `cargo run` unusable while iterating. Zed sets this; so does zeron.
+# `cargo run` unusable while iterating. Zed sets this.
 [profile.dev.package."*"]
 opt-level = 2
-
-# zeron's own numbers: its scenes rasterize in software every frame the camera
-# moves, so those two crates are optimized even in a debug build.
-[profile.dev.package.zeron-visual]
-opt-level = 3
-
-[profile.dev.package.zeron-visual-gpu]
-opt-level = 3

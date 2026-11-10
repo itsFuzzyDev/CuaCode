@@ -3,7 +3,7 @@
 Three frontends over one worker, which is the Python process in the parent
 directory: `quik` draws one conversation in a terminal and is the one in daily use,
 of an orchestrator: bin `cuacode`, it reads the state root itself and drives one worker.
-All four are built on the shared half below.
+All three are built on the shared half below.
 
 The `app` crate is meant to be the app: projects and the sessions standing in
 each, the conversation, and a composer that sets provider, model, permissions and

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Callable
 import threading
 
-from handler import catalog, faults
+from handler import catalog
 from handler.agent import flow
 from handler.agent.subagent import AgentSpec, run as run_agent
 
@@ -61,13 +61,10 @@ def _env(ctx, log_to: list, counter: dict):
     lock = threading.Lock()
 
     def log(message: str):
-        line = str(message)
-        log_to.append(line)
-        emit = ctx.get("emit") if isinstance(ctx, dict) else None
-        if callable(emit):
-            try: emit("workflow", {"type": "log", "text": line})
-            except Exception as e:
-                faults.note("a workflow log line", e, "it is in the workflow's own log, not on the screen")
+        # The run's own list, handed back with the result. Not emitted: the sink on
+        # ctx is the parent's chunk outbox, where a workflow's line would be re-yielded
+        # as if the parent's own turn had written it.
+        log_to.append(str(message))
 
     def agent(ref, prompt: str, **over):
         """Run an agent by name (or an AgentSpec) and return its output alone.
