@@ -1,0 +1,10 @@
+# The GUI frontend links zeron, and zeron is vendored rather than tracked:
+# `.gitignore` names `rust/zeron`, and a clone that never fetched it cannot
+# resolve the workspace at all -- every `cargo build -p ...` fails, including
+# the doctor's own, which is the one command that would have told you why.
+#
+# So the tree is pinned here, in the one file a bootstrap script and the doctor
+# can both read without parsing a manifest. Keep `rev` on a tag that matches the
+# `zeron-*` versions in `Cargo.lock`.
+repo = "https://github.com/zeronsh/zeron"
+rev = "v0.2.136"

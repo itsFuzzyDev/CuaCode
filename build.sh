@@ -33,6 +33,30 @@ rust_bin_dir() {
 
 mkdir -p bin
 
+# rust/zeron is vendored, not tracked (`.gitignore`), and rust/gui links it by
+# path. Cargo resolves the whole workspace before building anything, so a missing
+# tree stops every crate, not just the GUI. Fetch it before the first build.
+ensure_vendored() {
+    [ -f rust/zeron.toml ] || return 0
+    local repo rev tree at stale
+    repo="$(sed -n 's/^[[:space:]]*repo[[:space:]]*=[[:space:]]*"\{0,1\}\([^" ]*\)"\{0,1\}.*/\1/p' rust/zeron.toml | head -n 1)"
+    rev="$(sed -n 's/^[[:space:]]*rev[[:space:]]*=[[:space:]]*"\{0,1\}\([^" ]*\)"\{0,1\}.*/\1/p' rust/zeron.toml | head -n 1)"
+    [ -n "$repo" ] && [ -n "$rev" ] || return 0
+    tree="rust/zeron"
+    if [ -f "$tree/crates/ui/Cargo.toml" ]; then
+        at="$(git -C "$tree" describe --tags --always 2>/dev/null || true)"
+        [ "$at" = "$rev" ] && return 0
+        stale="rust/zeron.stale"
+        rm -rf "$stale"
+        mv "$tree" "$stale"
+        echo "the vendored zeron tree was $at, fetching $rev" >&2
+    fi
+    echo "fetching the vendored zeron tree ($rev) -- once, it is not in the repository" >&2
+    git -C rust clone --quiet --depth 1 --branch "$rev" -- "$repo" zeron
+}
+
+ensure_vendored
+
 keep_going=0
 args=()
 for arg in "$@"; do

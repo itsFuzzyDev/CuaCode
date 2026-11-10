@@ -84,7 +84,54 @@ export CUACODE_CWD="${CUACODE_CWD:-$launch_dir}"
 # is also what Windows' bin\cuacode.cmd runs, so both platforms answer from the
 # same implementation without needing the GUI. `cuacode doctor --upgrade` is
 # the same command acting on the answer.
+# --- vendored trees -----------------------------------------------------------
+# rust/zeron is in .gitignore: it is vendored rather than tracked, and rust/gui
+# links it by path. Cargo resolves the whole workspace before it builds anything,
+# so without it every `cargo build -p ...` fails -- including doctor's own, which
+# is the one command that would have explained why. rust/zeron.toml is the pin,
+# read here and by doctor.rs so the two cannot disagree.
+zeron_pin() {
+    [ -f rust/zeron.toml ] || return 0
+    sed -n 's/^[[:space:]]*\(repo\|rev\)[[:space:]]*=[[:space:]]*"\{0,1\}\([^" ]*\)"\{0,1\}.*/\1=\2/p' rust/zeron.toml
+}
+
+zeron_field() {
+    zeron_pin | sed -n "s/^$1=//p" | head -n 1
+}
+
+ensure_vendored() {
+    [ -f rust/zeron.toml ] || return 0
+    local repo rev tree at stale
+    repo="$(zeron_field repo)"
+    rev="$(zeron_field rev)"
+    [ -n "$repo" ] && [ -n "$rev" ] || return 0
+    tree="rust/zeron"
+    if [ -f "$tree/crates/ui/Cargo.toml" ]; then
+        at="$(git -C "$tree" describe --tags --always 2>/dev/null || true)"
+        [ "$at" = "$rev" ] && return 0
+        # Renamed, not checked out: a half-written tree from an interrupted
+        # clone is not something to guess at, and no one's work lives here.
+        stale="rust/zeron.stale"
+        rm -rf "$stale"
+        mv "$tree" "$stale"
+        echo "the vendored zeron tree was $at, fetching $rev" >&2
+    fi
+    echo "fetching the vendored zeron tree ($rev) -- once, it is not in the repository" >&2
+    git -C rust clone --quiet --depth 1 --branch "$rev" -- "$repo" zeron
+}
+
+# An upgrade replaces a frontend by renaming the running image aside, because a
+# running binary cannot be rewritten. Windows also refuses to delete such a copy
+# while its process holds it, which is what makes this safe: on Unix there is no
+# such copy, and on Windows the live one survives and the stale ones go.
+clear_stale_images() {
+    # .running- is the name an earlier build used for the same copy.
+    rm -f rust/target/release/*.exe.old-* rust/target/release/*.exe.running-* 2>/dev/null || true
+}
+
 if [ "$name" = "doctor" ]; then
+    ensure_vendored
+    clear_stale_images
     bin="rust/target/release/cuacode-doctor"
     [ "${OS:-}" = "Windows_NT" ] && bin="$bin.exe"
     if [ ! -x "$bin" ] || [ -n "$(find rust/src rust/Cargo.toml -newer "$bin" -print -quit)" ]; then

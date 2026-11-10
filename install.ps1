@@ -172,6 +172,74 @@ function Get-Frontends {
     return $found
 }
 
+function Get-ZeronPin {
+    # rust\zeron.toml, the one place the vendored tree's repo and rev are written
+    # down; doctor.rs reads the same file so the two cannot disagree. Absent means
+    # an older checkout with no path dependency on zeron.
+    $pin = Join-Path $PSScriptRoot 'rust\zeron.toml'
+    if (-not (Test-Path -LiteralPath $pin)) { return $null }
+    $values = @{}
+    foreach ($line in Get-Content -LiteralPath $pin) {
+        $text = ($line -split '#')[0].Trim()
+        if ($text -match '^([A-Za-z_]+)\s*=\s*"?([^" ]+)"?$') { $values[$Matches[1]] = $Matches[2] }
+    }
+    if (-not $values['repo'] -or -not $values['rev']) { return $null }
+    return [pscustomobject]$values
+}
+
+function Install-VendoredTrees {
+    # rust\zeron is in .gitignore: it is vendored, not tracked, and rust\gui links
+    # it by path. Cargo resolves the whole workspace before building anything, so
+    # without it every `cargo build -p ...` fails -- including the doctor's own,
+    # which is the one command that would have explained why. A fresh clone,
+    # therefore, has to fetch it, and that is this function's whole job.
+    $pin = Get-ZeronPin
+    if (-not $pin) { return }
+    if (-not (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        Warn "git not found, so the vendored zeron tree was not fetched (the GUI will not build)"
+        return
+    }
+
+    $tree = Join-Path $PSScriptRoot 'rust\zeron'
+    if (Test-Path -LiteralPath (Join-Path $tree 'crates\ui\Cargo.toml')) {
+        $at = (& git -C $tree describe --tags --always 2>$null | Select-Object -First 1)
+        if ($at -eq $pin.rev) {
+            Say "vendored zeron is $($pin.rev)"
+            return
+        }
+        # Rename rather than `git checkout`: a half-written tree from an
+        # interrupted clone is not something to guess at, and nothing's work
+        # lives in a vendored tree.
+        $stale = Join-Path $PSScriptRoot 'rust\zeron.stale'
+        if (Test-Path -LiteralPath $stale) { Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction SilentlyContinue }
+        Move-Item -LiteralPath $tree -Destination $stale -Force
+        Say "vendored zeron was $at, fetching $($pin.rev)"
+    }
+
+    Say "fetching the vendored zeron tree ($($pin.rev)) -- once, it is not in the repository"
+    # Shallow: the pin is a tag, the history is never linked against.
+    & git -C (Join-Path $PSScriptRoot 'rust') clone --quiet --depth 1 --branch $pin.rev -- $pin.repo zeron
+    if ($LASTEXITCODE -ne 0) {
+        Warn "could not fetch the vendored zeron tree -- the GUI will not build"
+        return
+    }
+    Say "vendored zeron $($pin.rev)"
+}
+
+function Clear-StaleImages {
+    # An upgrade replaces a frontend by renaming the running image aside, since
+    # Windows will not let cargo write a file it has mapped. Windows also refuses
+    # to delete such a copy while its process holds it -- so this is safe to run
+    # unconditionally, and anything it cannot remove is still in use.
+    $release = Join-Path $PSScriptRoot 'rust\target\release'
+    if (-not (Test-Path -LiteralPath $release)) { return }
+    Get-ChildItem -LiteralPath $release -Filter '*.exe.old-*' -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    # .running- is the name an earlier build used for the same copy.
+    Get-ChildItem -LiteralPath $release -Filter '*.exe.running-*' -ErrorAction SilentlyContinue |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+
 function Find-VsDevCmd {
     # vswhere knows about instances a glob would miss; the glob still covers a
     # Build Tools install that never registered one.
@@ -203,6 +271,25 @@ function Test-FileReplaceable([string]$Path) {
     catch { return $false }
 }
 
+function Move-RunningAside([string]$Path) {
+    # Windows refuses to open a running image for write (`os error 5`), which is
+    # what makes cargo fail when the frontend being rebuilt is the one the user
+    # is running install.ps1 from. It does allow the file to be *renamed*: the
+    # process keeps running from the moved image, unaffected, and a fresh binary
+    # can be written at the old name. doctor.rs does the same thing for
+    # `doctor --upgrade`; Clear-StaleImages takes these away again once whatever
+    # held them has exited, and never touches one still in use.
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    if (Test-FileReplaceable $Path) { return $null }
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
+    $aside = "$Path.old-$stamp"
+    try {
+        Move-Item -LiteralPath $Path -Destination $aside -Force -ErrorAction Stop
+        return $aside
+    }
+    catch { return $null }
+}
+
 function Build-Frontends([string]$VsDevCmd) {
     # One -p/--bin per cargo call: several bins in one call is the bug
     # `doctor --upgrade` hit. Keep going, like build.sh --keep-going: a GUI that
@@ -215,6 +302,14 @@ function Build-Frontends([string]$VsDevCmd) {
     $failed = @()
     $rust = Join-Path $PSScriptRoot 'rust'
     foreach ($frontend in Get-Frontends) {
+        # Free the image first if this frontend is the one running install.ps1 --
+        # cargo cannot write a running exe, and closing the terminal you are
+        # installing from is not something to ask of anyone.
+        $exe = Join-Path $rust "target\release\$($frontend.Bin).exe"
+        $aside = Move-RunningAside $exe
+        if ($aside) {
+            Say "$($frontend.Bin).exe is running -- moved it to $(Split-Path -Leaf $aside) so the new one can be written"
+        }
         $line = 'cd /d "{0}" && call "{1}" -arch=x64 >nul && cargo build --release -p {2} --bin {3}' -f $rust, $VsDevCmd, $frontend.Crate, $frontend.Bin
         # Not piped: a pipe makes PowerShell wait on every handle cargo hands
         # down, and cargo's progress output carries its own carriage returns.
@@ -228,7 +323,6 @@ function Build-Frontends([string]$VsDevCmd) {
             # rebuild of a working checkout fails is that the frontend being
             # rebuilt is the one the user is running in. Saying which one beats
             # an access-denied line from cargo.
-            $exe = Join-Path $rust "target\release\$($frontend.Bin).exe"
             if ((Test-Path -LiteralPath $exe) -and -not (Test-FileReplaceable $exe)) {
                 Warn "$($frontend.Bin).exe is running -- close it and run this again to update it"
             }
@@ -248,7 +342,11 @@ if ($build) {
         Warn "cargo not found, skipping the build -- get it from https://rustup.rs/"
         $build = $false
     }
-    else {
+    if ($build) {
+        # The vendored tree first: cargo cannot even resolve the workspace without
+        # it, so this has to happen before any -p build, doctor's own included.
+        Install-VendoredTrees
+        Clear-StaleImages
         Say "building frontends with $vsDevCmd"
         $failed = @(Build-Frontends -VsDevCmd $vsDevCmd)
         if ($failed.Count -gt 0) {
