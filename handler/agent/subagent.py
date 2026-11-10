@@ -117,20 +117,14 @@ def _settings(spec: AgentSpec, ctx=None):
     if params: out["params"] = params
     return out, config.api_key(provider), provider
 
-def _emit(ctx, name: str, chunk: dict):
-    """Progress out to whatever the caller wired up, if anything. A callback
-    that raises in its own code must not take the run down with it."""
-    fn = ctx.get("emit") if isinstance(ctx, dict) else None
-    if not callable(fn): return
-    try: fn(name, chunk)
-    except Exception as e:
-        # The subagent runs to its answer either way; a parent whose rows stopped
-        # moving is the thing that needs the reason.
-        faults.note(f"a {name} progress event from {getattr(fn, '__qualname__', 'the caller')}", e,
-                    "the run continues and its result still comes back")
-
 def _drive(spec, messages, settings, key, system, ctx, allow, extra, box, provider, budget):
-    """One pass of the round loop. Returns (content, rounds, stopped)."""
+    """One pass of the round loop. Returns (content, rounds, stopped).
+
+    These chunks stop here on purpose. `ctx["emit"]` is the parent's own chunk
+    outbox, so forwarding a subagent's round/assistant/done into it would have the
+    parent's turn loop count its rounds and write its records. A subagent reports
+    through the answer it returns, and a progress event would need its own wire.
+    """
     from handler.agent.main import generate      # late: main imports the tool registry
 
     stop = ctx.get("cancelled") if isinstance(ctx, dict) else None
@@ -144,7 +138,6 @@ def _drive(spec, messages, settings, key, system, ctx, allow, extra, box, provid
     try:
         for chunk in gen:
             t = chunk.get("type")
-            _emit(ctx, spec.name, chunk)
             if t == "usage":
                 # A side round is billed like any other, and the loop is the only thing
                 # that writes meta.json, so it goes into the queue the loop drains rather
