@@ -10,3 +10,4 @@ rust/target/
 rust/app/cuacode.app/
 docs/
 /rust/zeron
+/rust/gui
