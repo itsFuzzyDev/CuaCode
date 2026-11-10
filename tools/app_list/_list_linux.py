@@ -1,11 +1,13 @@
 import subprocess, os, glob, configparser
 
+from tools._display import env
+
 def running() -> list[str]:
-    r = subprocess.run(["xdotool", "search", "--name", ""], capture_output=True, text=True)
+    r = subprocess.run(["xdotool", "search", "--name", ""], capture_output=True, text=True, env=env())
     names = set()
     for win_id in r.stdout.strip().split("\n"):
         if not win_id: continue
-        n = subprocess.run(["xdotool", "getwindowname", win_id], capture_output=True, text=True)
+        n = subprocess.run(["xdotool", "getwindowname", win_id], capture_output=True, text=True, env=env())
         if n.stdout.strip(): names.add(n.stdout.strip())
     return sorted(names)
 
