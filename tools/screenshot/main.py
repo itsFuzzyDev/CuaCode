@@ -82,6 +82,10 @@ def run(args: dict, ctx) -> dict:
 
     plat = _capture_module()
     img = plat.capture()
+    # Where the picture's top-left corner sits on the screen. Not always (0, 0): a
+    # monitor can sit left of or above the primary one, and every label below is a
+    # screen coordinate the click tools aim at.
+    ox, oy = getattr(plat, "origin", lambda: (0, 0))()
     # Copied for the archive, because everything below mutates: draw_grid draws straight
     # onto whatever it is handed, and with no retina downscale to make a new image first
     # that would be this one, being written to disk on another thread.
@@ -97,13 +101,13 @@ def run(args: dict, ctx) -> dict:
     lw, lh = img.size
 
     region = args.get("region")
-    origin, zoom, cw, ch = (0, 0), 1.0, lw, lh
+    origin, zoom, cw, ch = (ox, oy), 1.0, lw, lh
     if region:
         from PIL import Image
         # Clamped, because these come from the model: zoom 0 divides by zero
         # and zoom 1000 crops to a single point.
         zoom = min(32.0, max(1.0, float(args.get("zoom") or 2)))
-        cx, cy = int(region[0]), int(region[1])
+        cx, cy = int(region[0]) - ox, int(region[1]) - oy
         cw, ch = max(1, min(lw, round(lw / zoom))), max(1, min(lh, round(lh / zoom)))
         x0 = max(0, min(cx - cw // 2, lw - cw))
         y0 = max(0, min(cy - ch // 2, lh - ch))
@@ -111,7 +115,7 @@ def run(args: dict, ctx) -> dict:
         # points, and a stretch would drift the grid labels from what they point at.
         img = img.crop((x0, y0, x0 + cw, y0 + ch)).resize(
             (round(cw * zoom), round(ch * zoom)), Image.LANCZOS)
-        origin = (x0, y0)
+        origin = (x0 + ox, y0 + oy)
         if not args.get("grid_size"):
             grid_size = max(5, int(100 / zoom))
 
@@ -126,6 +130,10 @@ def run(args: dict, ctx) -> dict:
     _archive(raw_copy, img, session_dir)
 
     out_meta = {"image_base64": b64, "width": lw, "height": lh, "grid_size": grid_size, "self_snapped": self_snapped}
+    # Every monitor in the picture, so the model can tell where one ends and the next
+    # begins rather than guessing from the labels alone.
+    screens = getattr(plat, "monitors", lambda: [])()
+    if screens: out_meta["monitors"] = screens
     if self_raised: out_meta["self_raised"] = True
     if opened: out_meta["opened_apps"] = opened
     if active_app: out_meta["parked_active_app"] = active_app

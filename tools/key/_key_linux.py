@@ -1,5 +1,7 @@
 import subprocess
 
+from tools._display import env
+
 _ALIASES = {"cmd": "super", "command": "super", "control": "ctrl", "option": "alt",
             "return": "Return", "enter": "Return", "escape": "Escape", "esc": "Escape",
             "space": "space", "tab": "Tab", "delete": "Delete", "backspace": "BackSpace",
@@ -11,6 +13,6 @@ def press(combo: str):
     xdotool_combo = "+".join(mapped)
     # Silent: an unknown key name is an xdotool error, and stderr is the terminal
     # the TUI is drawing in.
-    subprocess.run(["xdotool", "key", xdotool_combo], check=True,
+    subprocess.run(["xdotool", "key", xdotool_combo], check=True, env=env(),
                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
