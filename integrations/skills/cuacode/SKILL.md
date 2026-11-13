@@ -12,7 +12,7 @@ it is written down here and the files are on disk.
 ## Two halves
 
 The Python side is the worker: it is the agent, it holds the tools, it talks to
-the model. The Go side is a frontend: it draws the UI and nothing else. They
+the model. The Rust side is a frontend: it draws the UI and nothing else. They
 speak line-delimited JSON over stdin/stdout, so a frontend can be swapped or
 rewritten without the agent noticing.
 
@@ -23,6 +23,8 @@ handler/agent/          providers (ollama/openai/anthropic dialects), effort lad
                         subagent runner, workflow runner, parallel/pipeline
 handler/session/        conversation records, replay, blobs, ~/.cuacode paths
 handler/config.py       providers, keys, models, learned quirks
+handler/schedule.py     scheduled agents: folder discovery, cron and webhooks,
+                        one temporary home per run
 handler/context.py      what fills the window (/context), and per-round token rates
 handler/usage.py        per-round cost stamped on records, rolled into meta.json,
                         totalled by `./run.sh --usage` and /usage
@@ -58,6 +60,10 @@ skills/<name>/   skills, each with a SKILL.md. `always: true` in one's
                  puts its body in the system prompt instead of behind the tool
 mcp/servers.json MCP servers the mcp tool can reach
 memory/          one fact per file, under global/ projects/<slug>/ apps/<name>/
+scheduled/       scheduled agents, one folder each: job.toml/job.md, PROMPT.md,
+                 SYSTEM.md, skills/, subagents/, workflows/, tools/, mcp, providers
+scheduler.toml   where the scheduler's webhook listens (optional)
+scheduler/       scheduler state, run records and log
 hosts.json       the other machines a worker can run on (see Boxes)
 ```
 
@@ -243,6 +249,31 @@ folding every MCP tool's schema into the tool list would cost the whole
 conversation for a subject that may never come up. Servers start on first use
 and are kept for the session. Load the `adding-mcp-servers` skill before adding
 or debugging one.
+
+## Scheduled agents
+
+`handler/schedule.py` is a daemon, not a tool. A job is a folder in
+`~/.cuacode/scheduled/<name>/`; the folder name is the job name. `job.toml` or
+`job.md` holds the trigger (`when` cron/every/at, or `hook = true`) and the
+prompt. `permissions = "off"` is required, because a scheduled run has nobody to
+answer a gate.
+
+The daemon scans that directory every two seconds. There is no registration and
+no restart: a folder dropped in is a job, a folder removed is gone. One run at a
+time, in a worker started `--detached`.
+
+Each run gets a temporary home, built from the user's own and layered with the
+job's `providers.toml`, `mcp/servers.json`, `skills/`, `subagents/`, `workflows/`
+and `tools/`. A job's `SYSTEM.md` is appended to the user's `AGENTS.md` in that
+home, so it lands in the system prompt; `PROMPT.md` is the user message. Sessions
+and memory are symlinks to the real ones, so a run is an ordinary conversation.
+The worker reads the tool layer through `CUACODE_TOOLS`. The home is removed after
+the run; `~/.cuacode/scheduler/` holds the state, runs and log.
+
+The CLI is `./run.sh schedule` (`list`, `new`, `edit`, `run`, `hook`, `watch`,
+`start`/`stop`/`status`, `install-service`). `watch` and `GET /events` are the
+same SSE stream of job, webhook and run activity. The `writing-schedules` skill
+is the how-to for writing one.
 
 ## Providers
 

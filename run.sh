@@ -43,6 +43,7 @@ if [ "$1" = "--list" ] || [ "$1" = "list" ]; then
     echo "usage: ./run.sh <frontend> [args...]   anything else goes to the frontend"
     echo "       ./run.sh <frontend> --resume     carry on with an earlier conversation"
     echo "       ./run.sh --usage [--days N] [--json]"
+    echo "       ./run.sh schedule [command]      clock and webhook runs (--help first)"
     echo "frontends:"
     rust_frontends | awk -F: '$2 != "cuacode-doctor" { printf "  %s  (%s)\n", $2, $1 }'
     echo "  doctor  (rust)       the build, the tree, and how far behind origin it is"
@@ -52,15 +53,22 @@ fi
 name="$1"
 shift
 
-# Not a frontend: a question about the app rather than a conversation with it, so it
-# never starts a session of its own to answer. usage.py owns this, not the worker.
-if [ "$name" = "--usage" ] || [ "$name" = "usage" ]; then
-    py="${CUACODE_PYTHON:-}"
+# The worker's Python, for the commands that are not frontends. The venv is this
+# checkout's; CUACODE_PYTHON overrides it.
+pick_python() {
+    local py="${CUACODE_PYTHON:-}"
+    local cand
     for cand in venv/bin/python3 venv/bin/python .venv/bin/python3 .venv/bin/python; do
         [ -n "$py" ] && break
         [ -x "$cand" ] && py="$cand"
     done
-    exec "${py:-python3}" -m handler.usage "$@"
+    echo "${py:-python3}"
+}
+
+# Not a frontend: a question about the app rather than a conversation with it, so it
+# never starts a session of its own to answer. usage.py owns this, not the worker.
+if [ "$name" = "--usage" ] || [ "$name" = "usage" ]; then
+    exec "$(pick_python)" -m handler.usage "$@"
 fi
 
 # Frontends locate main.py by walking up from cwd; pin it so the worker is
@@ -106,6 +114,14 @@ if [ ! -f "$sentinel" ] || [ requirements.txt -nt "$sentinel" ]; then
         ./install.sh || exit 1
     fi
     mkdir -p bin && touch "$sentinel"
+fi
+
+# Also not a frontend: the clock and the webhook daemon. Below the worker pin
+# (each run is this checkout's worker) and below the dependency tripwire (the
+# daemon imports the worker's world, and a run must not be the thing that finds
+# out it is missing). It prints status when given no subcommand.
+if [ "$name" = "schedule" ] || [ "$name" = "scheduler" ]; then
+    exec "$(pick_python)" -m handler.schedule "$@"
 fi
 
 crate="$(rust_bin_dir "$name")"

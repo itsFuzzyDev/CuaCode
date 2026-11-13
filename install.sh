@@ -103,6 +103,7 @@ if mkdir -p "$BIN_DIR" 2>/dev/null && [ -w "$BIN_DIR" ]; then
 # Written by $(pwd)/install.sh. Launch this checkout's frontends from anywhere.
 #   cuacode           the quik TUI
 #   cuacode cuacode   the GUI
+#   cuacode schedule  the clock and webhook daemon
 #   cuacode --list    the frontends in this tree
 #   cuacode doctor    what this build is, and how far behind origin it is
 #   cuacode --usage   token usage report
