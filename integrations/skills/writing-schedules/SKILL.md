@@ -141,9 +141,9 @@ clock does. `watch` follows the daemon: job added, webhook, tool call, answer.
 A job missing from `list` has a file that did not parse; `list` prints the error
 under the rows, and the daemon writes the same error to its log.
 
-The daemon has to be running. `cuacode schedule install-service` installs and
-starts the systemd user unit; `schedule start` is the fallback. Without it, the
-folder sits there and nothing fires.
+The daemon has to be running. On Linux, `cuacode schedule install-service`
+installs and starts the systemd user unit. Elsewhere, `schedule start` runs it in
+the background. Without it, the folder sits there and nothing fires.
 
 ## Rules that bite
 

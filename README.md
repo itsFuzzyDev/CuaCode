@@ -196,6 +196,9 @@ To keep it running without a terminal open:
 cuacode schedule install-service   # systemd user unit, enabled and started
 ```
 
+On Linux, `install-service` writes a systemd user unit. On macOS, use `schedule
+start`; the scheduler itself is platform-neutral.
+
 ## Saying yes
 
 Anything that can hurt you asks first: writing files, running commands, fetching
