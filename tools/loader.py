@@ -1,4 +1,4 @@
-import json, yaml, importlib.util
+import json, os, yaml, importlib.util
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable
@@ -167,10 +167,15 @@ def registry(tools_dir=None) -> dict:
     turn for the self-describing tools only, so an agent can use a subagent or
     skill file it just wrote. Unchanged entries come back byte-identical, so the
     prompt cache survives.
+
+    `CUACODE_TOOLS` names another directory. A scheduled job sets it to its
+    per-run layer of built-ins plus its own tools, so one job can add or replace a
+    tool without every other conversation seeing it. Unset means this tree.
     """
     global _registry
     if _registry is None:
-        _registry = load_tools(tools_dir=tools_dir or Path(__file__).parent)
+        base = tools_dir or os.environ.get("CUACODE_TOOLS") or Path(__file__).parent
+        _registry = load_tools(tools_dir=base)
     return refresh_dynamic(_registry)
 
 def needs_vision(t) -> bool:

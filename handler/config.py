@@ -147,6 +147,9 @@ def settings(cfg: dict = None) -> dict:
     e = entry(name, cfg)
     out = {"provider": name}
     if e.get("model"): out["model"] = e["model"]
+    # One endpoint can be pointed elsewhere per provider entry. A scheduled job
+    # uses this to give its agent its own local server without a new registry key.
+    if e.get("base_url"): out["base_url"] = str(e["base_url"])
     # Always stated, never inferred downstream: this is where the written flag
     # and what the model has already refused are reconciled.
     out["vision"] = can_see(name, cfg)

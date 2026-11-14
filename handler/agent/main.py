@@ -464,6 +464,13 @@ def generate(API_KEY: str = None, ctx=None, messages: list[dict] = None, setting
     if messages is None: messages = [{"role": "user", "content": "hey"}]
     provider = settings.get("provider", "ollama")
     p = provider_obj or providers.get(provider)
+    # A base_url in the provider entry moves this one run to another endpoint.
+    # Copy before touching it: the registry instance carries per-turn state and
+    # is shared by every conversation in the process.
+    if settings.get("base_url"):
+        if provider_obj is None:
+            p = providers.new(provider)
+        p.base_url = settings["base_url"]
     model = settings.get("model") or p.default_model
     p.setup(API_KEY)
     # One canonical rung in, whatever this model understands out. Read per turn, so a
