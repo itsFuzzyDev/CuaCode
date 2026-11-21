@@ -149,7 +149,7 @@ def _unique(records: list[dict]) -> list[dict]:
     return out
 
 
-def sessions(discount: dict, only: list = None) -> list[dict]:
+def sessions(discount: dict, only: list = None, cutoff: str = "") -> list[dict]:
     """Every session's meta, with usage rebuilt from its own transcript, and each
     half-price model's off-peak share of rounds folded into `discount`.
 
@@ -163,6 +163,13 @@ def sessions(discount: dict, only: list = None) -> list[dict]:
     after it: the off-peak share is measured from the timestamps, so a report on
     four sessions has to measure those four's share. Filtering afterwards would
     price them with a discount earned by hundreds of other conversations.
+
+    `cutoff` (a YYYY-MM-DD date) does the same for time: the usage is rebuilt from
+    the rounds billed on or after it, and the off-peak share measured from those
+    rounds alone. A window is about rounds, not sessions, so a session that has not
+    run since the cutoff comes back with no usage at all rather than its all-time
+    total -- showing last week's conversation under tonight's date would be the
+    wrong number wearing the right one's name.
     """
     from handler.session import store
     want = set(only or ())
@@ -176,13 +183,17 @@ def sessions(discount: dict, only: list = None) -> list[dict]:
             metas.append(meta); continue
         if records:
             uniq = _unique(records)
+            if cutoff:
+                uniq = [r for r in uniq if (r.get("ts") or "")[:10] >= cutoff]
             for r in uniq:
                 m = (r.get("u") or {}).get("model") or ""
                 if m in HALF_PRICE:
                     off, n = discount.get(m, (0, 0))
                     discount[m] = (off + (1 if offpeak(r.get("ts")) else 0), n + 1)
             fresh = U.of_records(uniq)
-            if fresh: meta = {**meta, "usage": fresh}
+            # With a window, nothing in it is the answer too: an empty usage is this
+            # session's spend inside the window, not a reason to fall back to meta.json.
+            if fresh or cutoff: meta = {**meta, "usage": fresh}
         metas.append(meta)
     return metas
 
@@ -223,11 +234,16 @@ def partition(metas: list[dict]) -> tuple[list, list]:
     return measured, legacy
 
 
-def roles_of(meta: dict, table: dict) -> list[dict]:
+def roles_of(meta: dict, table: dict, loop: bool = False) -> list[dict]:
     """A session's side calls -- a subagent, the permission gate, a namer.
 
     Billed whether or not the conversation's own loop ran them, so each is a
     row under the session that paid for it, priced on its own counts.
+
+    `loop` adds the conversation's own rounds as `main`. They are not in `srcs`,
+    which is only what ran beside the conversation, so a table claiming to group
+    the same tokens by role would otherwise describe the side calls and leave the
+    rest of the bill unaccounted for.
     """
     u = meta.get("usage") or {}
     # The model is the session's own: a side call is made by this worker on this
@@ -235,11 +251,20 @@ def roles_of(meta: dict, table: dict) -> list[dict]:
     name = (u.get("models") or {})
     model = next(iter(name), "")
     model = model.split(" ", 1)[-1] if " " in model else model
-    out = []
+    out, sides = [], 0.0
     for src, spent in sorted((u.get("srcs") or {}).items(),
                              key=lambda kv: -((kv[1].get("in") or 0) + (kv[1].get("out") or 0))):
         v = usd(model, spent, table)
+        if v: sides += v["raw"]
         out.append({"src": src, "tokens": spent, "money": v})
+    if loop:
+        # The loop is what is left of the session once its side calls are paid for, not
+        # its tokens priced at one model's rate: a session that ran two models would
+        # have the whole bill put on the first one's, and the rows would sum past 100%.
+        whole = money_for(meta, table)
+        left = None if whole is None else max(0.0, whole - sides)
+        out.insert(0, {"src": "main", "tokens": loop_only(u),
+                       "money": None if left is None else {"usd": round(left, 2), "raw": left}})
     return out
 
 
@@ -275,6 +300,9 @@ def usd(model: str, c: dict, rates_: dict = None) -> dict | None:
     cost = fresh * rate_in + cached * rate_cache + (c.get("out") or 0) * rate_out
     return {
         "usd": round(cost / 1e6, 2),
+        # Unrounded, for adding up: summing the cents each round displays as turns a
+        # pile of small sessions into a total that its own rows cannot reach.
+        "raw": cost / 1e6,
         "in_usd": round(fresh * rate_in / 1e6, 2),
         "cache_usd": round(cached * rate_cache / 1e6, 2),
         "out_usd": round((c.get("out") or 0) * rate_out / 1e6, 2),
@@ -296,10 +324,10 @@ def money(rep: dict, rates_: dict = None) -> tuple[list, list, float]:
         name = m["name"].split(" ", 1)[-1]  # "ollama x" -> "x"
         v = usd(name, m, rates_)
         if v:
-            top += v["usd"]
-            floor += v["usd"] * floor_ratio(name, m)
+            top += v["raw"]
+            floor += v["raw"] * floor_ratio(name, m)
         (priced if v else unpriced).append({"name": m["name"], **(v or {}), "tokens": m})
-    priced.sort(key=lambda m: -m["usd"])
+    priced.sort(key=lambda m: -m["raw"])
     unpriced.sort(key=lambda m: -(m["tokens"]["in"] + m["tokens"]["out"]))
     return priced, unpriced, (floor / top if top else 1.0)
 
@@ -313,11 +341,12 @@ def _n(v: int) -> str:
 
 def render(rep: dict, priced: list, unpriced: list, days: int, floor: float = 1.0,
            split: tuple = None) -> str:
-    total = round(sum(m["usd"] for m in priced), 2)
+    total = round(sum(m["raw"] for m in priced), 2)
     head = f"spend · {rep['sessions']} sessions"
     if rep.get("since"):
-        head += f" · {rep['since']} to {rep['days'][-1]['day'] if rep.get('days') else '?'}"
-    if days: head += f" · last {days} days"
+        head += f" · {rep['since']}"
+        if rep.get("days") and len(rep["days"]) > 1: head += f" to {rep['days'][-1]['day']}"
+    if days: head += f" · last {days} day{'s' if days != 1 else ''}"
     if rep.get("unmeasured"):
         head += f" · {rep['unmeasured']} with nothing measured"
 
@@ -342,10 +371,6 @@ def render(rep: dict, priced: list, unpriced: list, days: int, floor: float = 1.
              f"  if cache hit  {'$' + format(total * floor, ',.2f'):>12}  floor: every silent round cached at its model's measured rate",
              f"  on the plan    {'$' + format(PLAN_USD, ',.2f') + '/mo':>12}  old Pro, flat"
              + (f" - {total / PLAN_USD:.1f}x that at the ceiling" if PLAN_USD else "")]
-    if days:
-        # The by-model split in a rollup only counts sessions entirely inside the
-        # window (see usage.rollup): half a session would overstate its model.
-        lines.append(f"  {'':<14}  {'':>12}  money by model excludes sessions that only partly fall in the window")
 
     width = max((len(m["name"].split(" ", 1)[-1]) for m in priced), default=0)
     if priced:
@@ -470,9 +495,15 @@ def main(argv: list[str]) -> int:
             print("costs: --only wants ids or a file of them")
             return 2
     discount = {}
-    metas = sessions(discount, only=only)
+    cutoff = U._cutoff(days)
+    metas = sessions(discount, only=only, cutoff=cutoff)
+    # A conversation that spent nothing in the window is not a session of this report.
+    if cutoff: metas = [m for m in metas if (m.get("usage") or {}).get("rounds")]
     measured, legacy = partition(metas)
-    boundary = measured_from(metas)
+    # The cache boundary is a property of the history, not of the window, so it is read
+    # from meta.json as written: --days 1 must not claim cache reporting began today.
+    from handler.session import store
+    boundary = measured_from(store.list_sessions())
 
     # Only measured sessions are priced by default. A session recorded before the
     # provider reported cache has real tokens and no cache figure, and a missing
@@ -490,12 +521,12 @@ def main(argv: list[str]) -> int:
         i = argv.index("--html")
         path = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("-") else "usage.html"
         Path(path).write_text(
-            html(rep, priced, table, measured, legacy, boundary, legacy_tokens, discount),
+            html(rep, priced, table, measured, legacy, boundary, legacy_tokens, discount, days),
             encoding="utf-8")
         print(f"wrote {path}")
     elif "--json" in argv:
         print(json.dumps({"plan_usd": PLAN_USD, "days": days,
-                          "total_usd": round(sum(m["usd"] for m in priced), 2),
+                          "total_usd": round(sum(m["raw"] for m in priced), 2),
                           "floor_ratio": round(floor, 4),
                           "cache_readings_from": boundary,
                           "priced_sessions": len(measured),
@@ -736,9 +767,12 @@ def loop_only(u: dict) -> dict:
     from these numbers and never from the rollup's.
     """
     srcs = u.get("srcs") or {}
-    sub = {k: sum(v.get(k) or 0 for v in srcs.values()) for k in ("rounds", "in", "out", "secs")}
+    sub = {k: sum(v.get(k) or 0 for v in srcs.values()) for k in ("rounds", "in", "out", "cache", "secs")}
     return {
         "in": max(0, (u.get("in") or 0) - sub["in"]),
+        # Cache travels with it, or the loop's own row is priced as if none of its
+        # re-sent prompt had ever been cached -- eight times the whole bill.
+        "cache": max(0, (u.get("cache") or 0) - sub["cache"]),
         "out": max(0, (u.get("out") or 0) - sub["out"]),
         "rounds": max(0, (u.get("rounds") or 0) - sub["rounds"]),
         "secs": max(0.0, (u.get("secs") or 0.0) - sub["secs"]),
@@ -919,13 +953,13 @@ def _bar(p: str) -> str:
 
 
 def html(rep: dict, priced: list, table: dict, measured: list, legacy: list,
-         boundary: str, legacy_tokens: dict, discount: dict) -> str:
+         boundary: str, legacy_tokens: dict, discount: dict, days: int = 0) -> str:
     """The whole thing as one page, generated from what was just computed.
 
     Every figure here comes from the same `rep` the terminal report uses, so the
     two cannot disagree, and nothing on the page is typed by hand.
     """
-    total = round(sum(m["usd"] for m in priced), 2)
+    total = round(sum(m["raw"] for m in priced), 2)
     t = rep["total"]
     tin, tout, trounds = t.get("in", 0), t.get("out", 0), t.get("rounds", 0)
     tcache = min(t.get("cache", 0), tin)
@@ -971,13 +1005,13 @@ def html(rep: dict, priced: list, table: dict, measured: list, legacy: list,
     # ---- by role across every session
     agg = {}
     for meta in measured:
-        for role in roles_of(meta, table):
+        for role in roles_of(meta, table, loop=True):
             a = agg.setdefault(role["src"], {"in": 0, "out": 0, "rounds": 0, "usd": 0.0})
             rs = role["tokens"]
             a["in"] += rs.get("in") or 0
             a["out"] += rs.get("out") or 0
             a["rounds"] += rs.get("rounds") or 0
-            if role["money"]: a["usd"] += role["money"]["usd"]
+            if role["money"]: a["usd"] += role["money"]["raw"]
     machine = sum(v["usd"] for k, v in agg.items() if k != "main")
 
     # Grouped: the general word is the row, and what ran the rounds sits under it.
@@ -1068,6 +1102,12 @@ def html(rep: dict, priced: list, table: dict, measured: list, legacy: list,
   <p class="lede">{len(legacy)} sessions recorded before the provider reported cache carry
   {legacy_tokens['in']:,} input and {legacy_tokens['out']:,} output tokens with no cache reading.
   A missing reading is not a zero, so they are counted here and not priced.</p></div>'''
+
+    span = rep.get("days") or []
+    # What the list is: the whole history, or the window the figure describes.
+    span_note = (f" in the last {days} day{'s' if days != 1 else ''}" if days
+                 else (', ' + boundary + ' onward' if boundary else ''))
+    when = span[0]["day"] + (" to " + span[-1]["day"] if len(span) > 1 else "") if span else ""
 
     return f'''<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><title>CuaCode usage</title>
@@ -1175,7 +1215,7 @@ def html(rep: dict, priced: list, table: dict, measured: list, legacy: list,
   footer {{ margin-top:38px; padding-top:20px; border-top:1px solid var(--line);
             color:var(--faint); font-size:12.5px; line-height:1.7; }}
 </style></head><body>
-<header><h1>CuaCode usage</h1><div class="when">{rep['days'][-1]['day'] if rep.get('days') else ''}</div></header>
+<header><h1>CuaCode usage</h1><div class="when">{when}</div></header>
 <div class="cap">Cost</div>
 <div class="figure num">${total:,.2f}</div>
 <div class="aside">
@@ -1184,7 +1224,7 @@ def html(rep: dict, priced: list, table: dict, measured: list, legacy: list,
   <span class="rule">|</span> <b class="num">{trounds:,}</b> requests
 </div>
 <div class="sec"><h2>By session</h2>
-  <p class="lede">{len(measured)} sessions with a cache reading{', ' + boundary + ' onward' if boundary else ''}.
+  <p class="lede">{len(measured)} sessions with a cache reading{span_note}.
   Each one's own work, with the background calls it triggered underneath it.</p>
   <table><thead><tr><th>Session</th><th>Input</th><th>From cache</th><th>Fresh input</th>
   <th>Output</th><th>Requests</th><th>Cost</th></tr></thead><tbody>
@@ -1279,7 +1319,7 @@ def money_for(meta: dict, table: dict) -> float | None:
         name = key.split(" ", 1)[-1] if " " in key else key
         v = usd(name, spent, table)
         if v:
-            total += v["usd"]
+            total += v["raw"]
             seen = True
     return round(total, 2) if seen else None
 
