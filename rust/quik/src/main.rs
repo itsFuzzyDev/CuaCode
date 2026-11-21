@@ -852,17 +852,24 @@ impl App {
         }
     }
 
-    /// Put a held prompt up once the keyboard has been still for `ASK_AFTER`, and
-    /// say whether it went up. Called from the loop's own round, which is what makes
-    /// a prompt wait for a pause rather than arrive over one.
+    /// Put a held prompt up, and say whether it went up. A permission waits for the
+    /// keyboard to be still for `ASK_AFTER`, which is what makes it arrive at a pause
+    /// rather than over a sentence; a question does not wait at all.
     fn raise_ask(&mut self) -> bool {
-        if self.prompt.is_some() || self.pending.is_none() {
+        if self.prompt.is_some() {
             return false;
         }
-        if self.since_key.elapsed() < ASK_AFTER {
+        let Some(ask) = self.pending.take() else {
+            return false;
+        };
+        // A permission is an interruption and waits for the keyboard to be still.
+        // A question is what the person is waiting on: holding it leaves the screen
+        // silent while the worker sits blocked on them, and every keypress pushes it
+        // further away. It goes up at once, over whatever is half typed.
+        if !ask.is_question() && self.since_key.elapsed() < ASK_AFTER {
+            self.pending = Some(ask);
             return false;
         }
-        let ask = self.pending.take().expect("checked above");
         // The one moment the mark goes up: from here the worker is blocked on a
         // person, and the worker's own stream says nothing about it.
         self.mark = Some(needs_you());
@@ -972,10 +979,11 @@ impl App {
                     ..asked
                 }
             };
-            // Held rather than shown: the worker is blocked either way, and a panel
-            // that takes the keyboard out of someone's hands mid-sentence is worse
-            // than a question that arrives a second later. `raise_ask` puts it up once
-            // the keyboard has been still for `ASK_AFTER`.
+            // A permission is held rather than shown: the worker is blocked either
+            // way, and a panel that takes the keyboard out of someone's hands
+            // mid-sentence is worse than a question that arrives a second later.
+            // `raise_ask` puts it up once the keyboard has been still for
+            // `ASK_AFTER`. A question is not held: it goes up over the sentence.
             self.pending = Some(asked);
             // The question has the keyboard, so a menu open under it would be a
             // list of things that cannot be chosen.
@@ -4806,6 +4814,26 @@ mod tests {
         assert_eq!(app.input, "half a sentence");
         let shown = frame_of(&mut app, 80, 24);
         assert!(shown.contains("allow shell?"), "{shown}");
+    }
+
+    /// A question the model asked is the thing the person is waiting for, not an
+    /// interruption to be waited out: it goes up at once, over a half-typed message.
+    #[test]
+    fn a_question_goes_up_over_the_typing() {
+        let mut app = App::new(None);
+        typed(&mut app, "half a sentence");
+        app.feed(
+            wire::parse(
+                r#"{"type":"permission","id":"q1","data":{"name":"ask_user","kind":"question","question":"which one?","options":["a","b"]}}"#,
+            )
+            .unwrap(),
+        );
+        assert!(app.raise_ask(), "the question waited for the keyboard to stop");
+        assert!(app.prompt.is_some(), "the question was held");
+        assert_eq!(app.mark, Some(needs_you()));
+        assert_eq!(app.input, "half a sentence", "the message was disturbed");
+        let shown = frame_of(&mut app, 100, 30);
+        assert!(shown.contains("which one?"), "{shown}");
     }
 
     /// The field holding this text, with the caret at its end. What most of these
