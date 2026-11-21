@@ -382,9 +382,28 @@ fn print_frame(path: &str, w: u16, h: u16, open: bool, colour: bool) -> io::Resu
     if colour {
         print_colours(term.backend().buffer());
     } else {
-        print!("{}", term.backend());
+        print_frame_text(term.backend().buffer());
     }
     Ok(())
+}
+
+/// The frame as characters, the way the test backend writes it, with the link
+/// sequence a cell carries taken out: an escape in the middle of a row is not
+/// layout, and this printing is how a layout is read.
+fn print_frame_text(buffer: &Buffer) {
+    for cells in buffer.content.chunks(buffer.area.width as usize) {
+        let mut row = String::from("\"");
+        let mut skip = 0u16;
+        for cell in cells {
+            let glyph = view::without_link(cell.symbol());
+            if skip == 0 {
+                row.push_str(&glyph);
+            }
+            skip = skip.max(view::columns(&glyph) as u16).saturating_sub(1);
+        }
+        row.push('"');
+        println!("{row}");
+    }
 }
 
 /// The same frame, one letter a cell, the letter standing for the colour that
@@ -3761,7 +3780,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         body.width.max(1) as usize,
         shimmer,
     );
-    let Drawn { lines, spans, anchors } = view::draw(&pieces, body.width.max(1) as usize);
+    let Drawn { lines, spans, anchors, links } = view::draw(&pieces, body.width.max(1) as usize);
     app.spans = spans;
     app.anchors = anchors;
     app.body_top = body.y;
@@ -3779,6 +3798,10 @@ fn draw(f: &mut Frame, app: &mut App) {
         app.follow = true;
     }
     f.render_widget(Paragraph::new(lines).scroll((app.scroll, 0)), body);
+    // The paragraph has laid the rows out; now the links on them become links. It
+    // has to be after the draw, because the column a label starts at is not known
+    // until the line has been wrapped and scrolled into the pane.
+    view::hyperlinks(f.buffer_mut(), body, app.scroll as usize, &links);
 
     // The box: a rule over the message, the message on its own line, the box's own
     // row under that, and a rule closing it. Three marks and the rail: the foot and the

@@ -15,8 +15,11 @@ use cuacode::code::Fence;
 use cuacode::code::Tone;
 use cuacode::session;
 use cuacode::transcript::{Row, describe_args, is_bulky};
+use ratatui::buffer::{Buffer, CellDiffOption};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use std::num::NonZeroU16;
 use serde_json::Value;
 
 use crate::{Opened, Turn};
@@ -365,6 +368,23 @@ pub struct Drawn {
     /// For every piece, the row it was drawn from and the row its step is folded
     /// against. Those two numbers are what a click on its screen lines acts on.
     pub anchors: Vec<(usize, usize)>,
+    /// Where the links on those lines are, and where each of them goes.
+    pub links: Vec<Link>,
+}
+
+/// A run of a screen line that is a link, and the address it opens.
+///
+/// A terminal hands a press to the address a cell carries and not to the words a
+/// row happens to hold, so the address has to be on the cell: `draw` says where,
+/// and `hyperlinks` puts it there once the paragraph has been laid out.
+pub struct Link {
+    /// The screen line, counted from the first line of the conversation.
+    pub line: usize,
+    /// The column it starts at, counted from the left edge of the row.
+    pub col: usize,
+    /// How many columns it covers.
+    pub width: usize,
+    pub url: String,
 }
 
 /// Fold `pieces` onto a screen of this width, with a blank line wherever a piece
@@ -374,6 +394,7 @@ pub struct Drawn {
 /// the scroll offset exact and a click on the gap landing on the row above it.
 pub fn draw(pieces: &[Held], width: usize) -> Drawn {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut links: Vec<Link> = Vec::new();
     let mut spans = vec![(0usize, 0usize); pieces.len()];
     for (i, held) in pieces.iter().enumerate() {
         let piece = &held.piece;
@@ -381,7 +402,14 @@ pub fn draw(pieces: &[Held], width: usize) -> Drawn {
         let start = lines.len();
         let room = width.saturating_sub(lead).max(1);
         for (n, logical) in piece.lines.iter().enumerate() {
-            for (k, runs) in wrap_runs(logical, room).into_iter().enumerate() {
+            let urls = link_urls(logical);
+            for (k, wrapped) in wrap_runs(logical, &urls, room).into_iter().enumerate() {
+                // The line this is about to become, so a link lands on the row it
+                // is actually drawn on and not one either side of it.
+                for (col, wide, url) in &wrapped.links {
+                    links.push(Link { line: lines.len(), col: lead + col, width: *wide, url: url.clone() });
+                }
+                let runs = wrapped.runs;
                 // A continuation is indented by as many columns as the lead draws
                 // in, not by as many characters as it is written with: a lead is
                 // two columns wide and two characters long only while it is ASCII.
@@ -422,7 +450,135 @@ pub fn draw(pieces: &[Held], width: usize) -> Drawn {
         }
         spans[i] = (start, lines.len());
     }
-    Drawn { lines, spans, anchors: pieces.iter().map(|p| (p.row, p.head)).collect() }
+    Drawn { lines, spans, anchors: pieces.iter().map(|p| (p.row, p.head)).collect(), links }
+}
+
+/// Make a link a link on the terminal's own terms: every cell of it carries the
+/// OSC 8 sequence, so a press goes to the address and not to the row under the
+/// pointer.
+///
+/// The sequence opens and closes inside one cell. One that opened in a cell and
+/// closed in another would be state the terminal carries between them, and a
+/// frame that redrew only part of a link would leave the rest of the screen
+/// linked to it.
+pub fn hyperlinks(buf: &mut Buffer, area: Rect, scroll: usize, links: &[Link]) {
+    for link in links {
+        let Some(row) = link.line.checked_sub(scroll) else { continue };
+        if row >= area.height as usize {
+            continue;
+        }
+        let y = area.y + row as u16;
+        let target: String = target(&link.url).chars().filter(|c| !c.is_control()).collect();
+        for col in link.col..link.col + link.width {
+            let x = area.x + col as u16;
+            if x >= area.right() {
+                break;
+            }
+            let Some(cell) = buf.cell_mut((x, y)) else { continue };
+            let glyph = cell.symbol().to_string();
+            // The hollow half of a wide glyph is not a cell anything draws in.
+            if glyph.is_empty() {
+                continue;
+            }
+            let wide = columns(&glyph);
+            let Some(wide) = NonZeroU16::new(wide as u16) else { continue };
+            cell.set_symbol(&format!("\u{1b}]8;;{target}\u{1b}\\{glyph}\u{1b}]8;;\u{1b}\\"));
+            cell.set_diff_option(CellDiffOption::ForcedWidth(wide));
+        }
+    }
+}
+
+/// A cell's symbol with its link sequence taken off: what the cell draws, without
+/// the terminal's spelling of where a press on it goes.
+///
+/// Only `--frame` asks this. A frame is read as a layout, and an escape in the
+/// middle of a row is not layout. The sequence ends at a backslash after an ESC,
+/// which a URL does not hold.
+pub fn without_link(symbol: &str) -> String {
+    let mut out = String::new();
+    let mut rest = symbol;
+    while let Some(at) = rest.find('\u{1b}') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at..];
+        rest = match after.find('\\') {
+            Some(end) => &after[end + 1..],
+            None => "",
+        };
+    }
+    out.push_str(rest);
+    out
+}
+
+/// What the terminal is handed for a link: an address as it stands, and a path
+/// made into a `file://` one, because a terminal opens the schemes it knows and a
+/// path is not one of them.
+fn target(url: &str) -> String {
+    if is_url(url) {
+        return url.to_string();
+    }
+    let path = match url.strip_prefix("~/") {
+        Some(rest) => cuacode::home_dir().map(|home| format!("{}/{rest}", home.display())),
+        None => None,
+    };
+    let path = path.as_deref().unwrap_or(url);
+    if path.starts_with('/') {
+        // A space ends an address in some openers, and `%20` is how a URL says one.
+        return format!("file://{}", path.replace(' ', "%20"));
+    }
+    url.to_string()
+}
+
+/// Whether a run of text is an address rather than a label: a scheme, a colon and
+/// something after it, and no space anywhere in it.
+fn is_url(text: &str) -> bool {
+    text.split_once(':').is_some_and(|(scheme, rest)| {
+        !rest.is_empty()
+            && !text.contains(char::is_whitespace)
+            && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+    })
+}
+
+/// Whether a run is a link's own words: the colour a link is drawn in, underlined.
+fn is_link(style: &Style) -> bool {
+    style.fg == Some(ink::link()) && style.add_modifier.contains(Modifier::UNDERLINED)
+}
+
+/// Where every run of one line goes, for the runs that are links.
+///
+/// A link is drawn as its label and then its address in brackets, so the run after
+/// the label is the address. An autolink has no second half: it is its own.
+fn link_urls(runs: &[Run]) -> Vec<Option<&str>> {
+    let mut out = vec![None; runs.len()];
+    let mut i = 0;
+    while i < runs.len() {
+        if !is_link(&runs[i].1) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < runs.len() && is_link(&runs[i].1) {
+            i += 1;
+        }
+        let url = if i == start + 1 && is_url(&runs[start].0) {
+            Some(runs[start].0.as_str())
+        } else {
+            runs.get(i)
+                .and_then(|(text, _)| text.strip_prefix(" ("))
+                .and_then(|text| text.strip_suffix(')'))
+        };
+        if let Some(url) = url {
+            for slot in &mut out[start..i] {
+                *slot = Some(url);
+            }
+            // The address is where it goes and is worth a press as much as the
+            // label is, so it carries the link too.
+            if let Some(slot) = out.get_mut(i) {
+                *slot = Some(url);
+            }
+        }
+    }
+    out
 }
 
 /// Wrap runs onto lines of at most `width` columns, on words.
@@ -434,14 +590,15 @@ pub fn draw(pieces: &[Held], width: usize) -> Drawn {
 /// Columns, not characters: a wide glyph is two of the width it takes up, and a
 /// line counted in characters draws past the edge it was wrapped to. Everything
 /// here that measures a word measures it in columns for that reason.
-fn wrap_runs(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
+fn wrap_runs(runs: &[Run], urls: &[Option<&str>], width: usize) -> Vec<Wrapped> {
     // A line with nothing on it is still a line: it is the gap between two
     // paragraphs, and dropping it would run them together.
     if runs.is_empty() {
-        return vec![Vec::new()];
+        return vec![Wrapped { runs: Vec::new(), links: Vec::new() }];
     }
-    let mut out: Vec<Vec<Run>> = Vec::new();
+    let mut out: Vec<Wrapped> = Vec::new();
     let mut line: Vec<Run> = Vec::new();
+    let mut links: Vec<(usize, usize, String)> = Vec::new();
     let mut used = 0usize;
     // How many spaces have been seen and not yet put anywhere. They are written
     // in front of the next word, and taken by a wrap, which is the one place they
@@ -450,21 +607,35 @@ fn wrap_runs(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
     // A count, and not a flag: a code line's indent and a box's padding are runs
     // of spaces, and a row that collapsed them would be lying about the two
     // things this drawing is for. Only the space *between* two words is one space.
+    //
+    // The style is the one the spaces were written in, not the next word's: a
+    // space in front of a link is not part of the link, and drawn in the link's
+    // underline it is a line running on past the word it belongs to.
     let mut pending = 0usize;
+    let mut pending_style = Style::new();
+    let mut pending_url: Option<&str> = None;
     let chunks = runs
         .iter()
-        .flat_map(|(text, style)| text.split_inclusive(' ').map(|c| (c, *style)));
-    for (chunk, style) in chunks {
+        .enumerate()
+        .flat_map(|(n, (text, style))| text.split_inclusive(' ').map(move |c| (n, c, *style)));
+    for (n, chunk, style) in chunks {
         let word = chunk.trim_end_matches(' ');
         let trailed = word.len() < chunk.len();
+        let url = urls.get(n).copied().flatten();
         if !word.is_empty() {
             if used + pending + columns(word) > width && !line.is_empty() {
-                out.push(std::mem::take(&mut line));
+                out.push(Wrapped { runs: std::mem::take(&mut line), links: std::mem::take(&mut links) });
                 used = 0;
                 pending = 0;
             }
             if pending > 0 {
-                push(&mut line, &" ".repeat(pending), style);
+                // The spaces go with the run they were written in: one in front of
+                // a label is not part of the label, and a link that covered it would
+                // answer a press on the gap before the word.
+                if let Some(url) = pending_url {
+                    record(&mut links, used, pending, url);
+                }
+                push(&mut line, &" ".repeat(pending), pending_style);
                 used += pending;
                 pending = 0;
             }
@@ -478,23 +649,63 @@ fn wrap_runs(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
                 let cut = split_at(&word, room);
                 let rest = word[cut..].to_string();
                 word.truncate(cut);
+                let wide = columns(&word);
+                if let Some(url) = url {
+                    record(&mut links, used, wide, url);
+                }
                 push(&mut line, &word, style);
-                out.push(std::mem::take(&mut line));
+                out.push(Wrapped { runs: std::mem::take(&mut line), links: std::mem::take(&mut links) });
                 word = rest;
                 room = width;
                 used = 0;
             }
-            used += columns(&word);
+            let wide = columns(&word);
+            if let Some(url) = url {
+                record(&mut links, used, wide, url);
+            }
+            used += wide;
             if !word.is_empty() {
                 push(&mut line, &word, style);
             }
         }
-        pending += usize::from(trailed);
+        if trailed {
+            pending += 1;
+            pending_style = style;
+            pending_url = url;
+        }
     }
     if !line.is_empty() {
-        out.push(line);
+        out.push(Wrapped { runs: line, links });
     }
     out
+}
+
+/// The same wrap where nothing on the line is a link: a code block's lines and the
+/// detail panel's, which are not markdown and have no address on them.
+fn wrap_plain(runs: &[Run], width: usize) -> Vec<Vec<Run>> {
+    wrap_runs(runs, &[], width).into_iter().map(|wrapped| wrapped.runs).collect()
+}
+
+/// The runs of one screen line, and the columns of it that are links.
+struct Wrapped {
+    runs: Vec<Run>,
+    /// `(column, width, address)` for each link on the line, in order.
+    links: Vec<(usize, usize, String)>,
+}
+
+/// One link run's columns on a line, joined to the one before it when they touch
+/// and go to the same place: a label is one link even when it is several words.
+fn record(links: &mut Vec<(usize, usize, String)>, at: usize, wide: usize, url: &str) {
+    if wide == 0 {
+        return;
+    }
+    if let Some((last_at, last_wide, last_url)) = links.last_mut() {
+        if last_url == url && *last_at + *last_wide == at {
+            *last_wide += wide;
+            return;
+        }
+    }
+    links.push((at, wide, url.to_string()));
 }
 
 /// A line of code with its tabs turned into the spaces they stand for.
@@ -935,7 +1146,13 @@ fn step(
     // it is and what it is on. One line whether the step is open or folded -- opening
     // it adds the checklist below, it does not add to this -- and it is not in the tally
     // below, because the plan is the state of the work and not a call that ran.
-    for (_, found) in &plans {
+    //
+    // Only the newest plan in the step is drawn. Every `todo` call answers with the
+    // whole list, so a step that updated it three times answered three times and the
+    // first two answers are the same list with fewer ticks on it: three `2/5 done`
+    // lines down one step, each true when it was written and only the last one true
+    // now. The checklist below already keeps to the same rule.
+    if let Some((_, found)) = plans.last() {
         out.push(Held { row: head, head, piece: plan_line(found) });
     }
 
@@ -1738,7 +1955,7 @@ fn formatted(text: &str, style: Style, room: usize) -> Vec<Vec<Run>> {
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
         i += 1;
-        if let Some(info) = trimmed.strip_prefix("```") {
+        if let Some(info) = fence_info(trimmed) {
             // The fence is a marker, not a line: what it wraps is what matters, and
             // it is drawn as the code it is. What is left on the markers' line is the
             // language, the one thing that says how to read it.
@@ -1782,13 +1999,16 @@ fn formatted(text: &str, style: Style, room: usize) -> Vec<Vec<Run>> {
             continue;
         }
         if let Some(title) = heading(trimmed) {
-            out.push(vec![
+            out.push(heading_runs(title, indent, style));
+            continue;
+        }
+        if let Some((number, rest)) = ordered(trimmed) {
+            let mut runs = vec![
                 (" ".repeat(indent), style),
-                (
-                    title.trim_end().to_string(),
-                    style.add_modifier(Modifier::BOLD),
-                ),
-            ]);
+                (format!("{number}. "), style.fg(ink::quiet())),
+            ];
+            runs.extend(inline(rest, style));
+            out.push(runs);
             continue;
         }
         if let Some(rest) = ["- ", "* ", "+ "]
@@ -1804,6 +2024,21 @@ fn formatted(text: &str, style: Style, room: usize) -> Vec<Vec<Run>> {
             runs.extend(inline(rest, style));
             out.push(runs);
             continue;
+        }
+        // A plain line with a row of `=` or `-` under it is a heading, and that row
+        // is its marker: the underline is how the oldest markdown wrote one, and a
+        // model still writes it. It is read last, so a list item or a quote over a
+        // rule stays what it is.
+        if let Some(next) = lines.get(i) {
+            let under = next.trim();
+            let setext = !under.is_empty()
+                && (under.chars().all(|c| c == '=')
+                    || (under.len() >= 2 && under.chars().all(|c| c == '-')));
+            if setext {
+                out.push(heading_runs(trimmed, indent, style));
+                i += 1;
+                continue;
+            }
         }
         out.push(inline(line, style));
     }
@@ -1849,6 +2084,44 @@ fn heading(line: &str) -> Option<&str> {
         .flatten()
 }
 
+/// A heading's line, drawn as the prose it still is: its own markers are read, and
+/// the closing hashes of an ATX heading are its marker and not its words.
+fn heading_runs(title: &str, indent: usize, style: Style) -> Vec<Run> {
+    let title = title.trim_end();
+    // A closing run of `#` is a marker only when a space stands before it: `## C#`
+    // is a language and not a heading's tail.
+    let hashes = title.chars().rev().take_while(|c| *c == '#').count();
+    let title = if hashes > 0 && hashes < title.len() {
+        let before = title[..title.len() - hashes].chars().next_back();
+        if before == Some(' ') {
+            title[..title.len() - hashes].trim_end()
+        } else {
+            title
+        }
+    } else {
+        title
+    };
+    let mut runs = Vec::new();
+    if indent > 0 {
+        push(&mut runs, &" ".repeat(indent), style);
+    }
+    runs.extend(inline(title, style.add_modifier(Modifier::BOLD)));
+    runs
+}
+
+/// An ordered list item: the number as it was written, and what it says.
+///
+/// One to nine digits, a `.` or a `)`, and a space. The digit cap is markdown's own,
+/// and it is what keeps a year or `2.5` from starting a list.
+fn ordered(line: &str) -> Option<(&str, &str)> {
+    let digits = line.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 || digits > 9 {
+        return None;
+    }
+    let rest = line[digits..].strip_prefix(['.', ')'])?;
+    Some((&line[..digits], rest.strip_prefix(' ')?))
+}
+
 /// A quote's depth and what is quoted: one `>` per level, spaces allowed between
 /// them.
 fn quote(line: &str) -> Option<(usize, &str)> {
@@ -1870,6 +2143,32 @@ fn task(rest: &str) -> Option<(bool, &str)> {
     })
 }
 
+/// A fence's info string, when the line is a fence: three backticks or tildes, or a
+/// line of nothing but two backticks.
+///
+/// CommonMark wants three, but a model quoting a block inside a block writes two,
+/// and a line with nothing on it but backticks is never prose. The two-tick form has
+/// to be the whole line: ` ``x`` ` at the start of one is a code span.
+fn fence_info(line: &str) -> Option<&str> {
+    let ticks = line.chars().take_while(|c| *c == '`').count();
+    if ticks >= 3 {
+        return Some(&line[ticks..]);
+    }
+    let tildes = line.chars().take_while(|c| *c == '~').count();
+    if tildes >= 3 {
+        return Some(&line[tildes..]);
+    }
+    (ticks >= 2 && line.chars().all(|c| c == '`')).then_some("")
+}
+
+/// One cell of the row of dashes under a table's header, with the colons that say
+/// which way its column is aligned: `---`, `:---`, `---:` and `:---:` are all one.
+fn rule_cell(cell: &str) -> bool {
+    let cell = cell.strip_prefix(':').unwrap_or(cell);
+    let cell = cell.strip_suffix(':').unwrap_or(cell);
+    !cell.is_empty() && cell.chars().all(|c| c == '-')
+}
+
 /// A rule: three or more of the same `-`, `*` or `_`, spaces allowed between them.
 fn dashed(line: &str) -> bool {
     let marks: Vec<char> = line.chars().filter(|c| !c.is_whitespace()).collect();
@@ -1889,7 +2188,7 @@ fn table(block: &[String], style: Style, room: usize) -> Vec<Vec<Run>> {
         let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
         // The row of dashes under the first one is markdown for "this is a table",
         // and is drawn as the rule it stands for.
-        if n == 1 && cells.iter().all(|c| !c.is_empty() && dashed(c)) {
+        if n == 1 && cells.iter().all(|c| rule_cell(c)) {
             rule = Some(cells.len());
             continue;
         }
@@ -1976,79 +2275,284 @@ pub(crate) fn clip_runs(runs: &[Run], most: usize) -> Vec<Run> {
 }
 
 /// A line with its inline markers gone: `***both***`, `**bold**`, `*italic*`,
-/// `_italic_`, `~~struck~~`, `` `code` `` and `[a link](where)`.
+/// `__bold__`, `_italic_`, `~~struck~~`, `` `code` ``, `[a link](where)`,
+/// `[a link](<where it goes>)`, `![alt](src)` and `<https://autolink>`.
 ///
-/// An unclosed marker is left as written rather than swallowed.
+/// The parse is recursive, because markdown nests: a bold run holds a code span, a
+/// link's label holds both. An unclosed marker is left as written rather than
+/// swallowed, and a `\` in front of a marker makes it the character it is.
 fn inline(text: &str, base: Style) -> Vec<Run> {
-    let marks: [(&str, Style); 6] = [
-        ("***", base.add_modifier(Modifier::BOLD | Modifier::ITALIC)),
-        ("**", base.add_modifier(Modifier::BOLD)),
-        ("~~", base.add_modifier(Modifier::CROSSED_OUT)),
-        ("`", base.fg(ink::code())),
-        ("*", base.add_modifier(Modifier::ITALIC)),
-        ("_", base.add_modifier(Modifier::ITALIC)),
-    ];
     let mut out: Vec<Run> = Vec::new();
     let mut plain = String::new();
     let mut at = 0;
     while at < text.len() {
+        let rest = &text[at..];
+        // A backslash takes the marker after it as a character: `\*` is an asterisk
+        // and not the start of an emphasis nobody closed.
+        if let Some((lit, used)) = escape(rest) {
+            plain.push(lit);
+            at += used;
+            continue;
+        }
+        // `<https://x>` is a link whose label is the address, so nothing is said
+        // twice: there is no second spelling of it to print beside it.
+        if let Some((url, used)) = autolink(rest) {
+            if !plain.is_empty() {
+                push(&mut out, &std::mem::take(&mut plain), base);
+            }
+            push(&mut out, url, linked(base));
+            at += used;
+            continue;
+        }
+        // A code span is what is between the ticks, verbatim: no marker inside it is
+        // a marker, which is the whole reason it exists.
+        if let Some((code, used)) = code_span(rest) {
+            if !plain.is_empty() {
+                push(&mut out, &std::mem::take(&mut plain), base);
+            }
+            push(&mut out, code, base.fg(ink::code()));
+            at += used;
+            continue;
+        }
         // A link is two markers, not one: the label and where it goes. The address
         // is kept beside the label unless the label already is the address, because
         // a link you cannot read the target of is a dead end in a terminal.
-        if let Some((label, url, used)) = link(&text[at..]) {
+        if let Some((label, url, used)) = link(rest) {
             if !plain.is_empty() {
-                out.push((std::mem::take(&mut plain), base));
+                push(&mut out, &std::mem::take(&mut plain), base);
             }
-            out.push((
-                label.to_string(),
-                base.fg(ink::link()).add_modifier(Modifier::UNDERLINED),
-            ));
+            out.extend(inline(label, linked(base)));
             if url != label {
-                out.push((format!(" ({url})"), base.fg(ink::quiet())));
+                push(&mut out, &format!(" ({url})"), base.fg(ink::quiet()));
             }
             at += used;
             continue;
         }
-        let found = marks.iter().find_map(|(mark, style)| {
-            let after = text.get(at..)?.strip_prefix(mark)?;
-            let end = after.find(mark)?;
-            (end > 0).then(|| (mark.len(), *style, &after[..end]))
-        });
-        match found {
-            Some((mark, style, inner)) => {
-                if !plain.is_empty() {
-                    out.push((std::mem::take(&mut plain), base));
-                }
-                out.push((inner.to_string(), style));
-                at += mark + inner.len() + mark;
+        if let Some((start, end, style, used)) = emphasis(text, at, base) {
+            if !plain.is_empty() {
+                push(&mut out, &std::mem::take(&mut plain), base);
             }
-            None => {
-                let ch = text[at..]
-                    .chars()
-                    .next()
-                    .expect("a position inside the text");
-                plain.push(ch);
-                at += ch.len_utf8();
-            }
+            out.extend(inline(&text[start..end], style));
+            at = used;
+            continue;
         }
+        let ch = rest.chars().next().expect("a position inside the text");
+        plain.push(ch);
+        at += ch.len_utf8();
     }
     if !plain.is_empty() {
-        out.push((plain, base));
+        push(&mut out, &plain, base);
     }
     out
 }
 
+/// The two things a link is drawn in: the address's colour, and the underline that
+/// says it is one.
+fn linked(base: Style) -> Style {
+    base.fg(ink::link()).add_modifier(Modifier::UNDERLINED)
+}
+
+/// A backslash and the marker it takes as a character.
+fn escape(rest: &str) -> Option<(char, usize)> {
+    let after = rest.strip_prefix('\\')?;
+    let ch = after.chars().next()?;
+    "\\`*_{}[]()<>#+-.!|~'\"".contains(ch).then_some((ch, 1 + ch.len_utf8()))
+}
+
+/// `<...>` where the inside is an address or a mailbox: what it says, and how many
+/// bytes the brackets and all took.
+///
+/// A scheme is a letter followed by letters, digits, `+`, `.` or `-`, and a mailbox
+/// is the one shape with an `@` and no colon. Anything else inside brackets is a
+/// comparison or a tag and is left as written.
+fn autolink(rest: &str) -> Option<(&str, usize)> {
+    let inside = rest.strip_prefix('<')?;
+    let end = inside.find('>')?;
+    let url = &inside[..end];
+    if url.is_empty() || url.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let is_url = url.split_once(':').is_some_and(|(scheme, rest)| {
+        !scheme.is_empty()
+            && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c))
+            && !rest.is_empty()
+    });
+    let is_mail = !is_url && url.contains('@') && !url.contains(':');
+    if !is_url && !is_mail {
+        return None;
+    }
+    // A mailbox is written `mailto:someone`, and the door is not part of the name.
+    Some((url.strip_prefix("mailto:").unwrap_or(url), end + 2))
+}
+
+/// A code span: a run of backticks, what is between it and the same run again.
+///
+/// A run of two holds a backtick, which is how a markdown writer writes one. One
+/// space on each end of the content is the fence's padding and is not the code's.
+fn code_span(rest: &str) -> Option<(&str, usize)> {
+    let ticks = rest.chars().take_while(|c| *c == '`').count();
+    if ticks == 0 {
+        return None;
+    }
+    let fence = "`".repeat(ticks);
+    let mut from = ticks;
+    while let Some(found) = rest[from..].find(&fence) {
+        let at = from + found;
+        let before = rest[..at].chars().next_back();
+        let after = rest[at + ticks..].chars().next();
+        // Part of a longer run is that run's fence, not this one's.
+        if before == Some('`') || after == Some('`') {
+            from = at + ticks;
+            continue;
+        }
+        let mut code = &rest[ticks..at];
+        if code.len() >= 2
+            && code.starts_with(' ')
+            && code.ends_with(' ')
+            && !code.trim().is_empty()
+        {
+            code = &code[1..code.len() - 1];
+        }
+        return Some((code, at + ticks));
+    }
+    None
+}
+
 /// A `[label](where)` at the front of `rest`: the two, and how many bytes they took.
+///
+/// The destination is written two ways and both are markdown: bare, where it ends at
+/// the first space that starts a title, or in angle brackets, which is how an address
+/// with a space in it, or a wiki link's own parentheses, is written at all. The title
+/// is read and not drawn: a row has one line for the address and the address is what
+/// a terminal reads.
+///
 /// An image is the same shape with a `!` in front, and is drawn as its alt text and
 /// its address: a terminal row has nowhere to put a picture.
 fn link(rest: &str) -> Option<(&str, &str, usize)> {
     let bang = usize::from(rest.starts_with('!'));
     let inside = rest[bang..].strip_prefix('[')?;
-    let close = inside.find("](")?;
-    let after = &inside[close + 2..];
-    let end = after.find(')')?;
-    let (label, url) = (&inside[..close], &after[..end]);
-    (!label.is_empty() && !url.is_empty()).then_some((label, url, bang + 1 + close + 2 + end + 1))
+    let close = bracket(inside)?;
+    let label = &inside[..close];
+    let after = inside.get(close + 1..)?.strip_prefix('(')?;
+    let (url, used) = if let Some(angled) = after.strip_prefix('<') {
+        let end = angled.find('>')?;
+        (&angled[..end], 1 + end + 1)
+    } else {
+        let mut depth = 0usize;
+        let mut end = after.len();
+        for (at, ch) in after.char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' if depth == 0 => {
+                    end = at;
+                    break;
+                }
+                ')' => depth -= 1,
+                c if c.is_whitespace() => {
+                    end = at;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        (&after[..end], end)
+    };
+    // What is left before the `)` is the title, if any, and it has to be one: a line
+    // of prose that happens to hold `]` and `(` is not a link.
+    let tail = &after[used..];
+    let shut = tail.find(')')?;
+    let title = tail[..shut].trim();
+    let titled = title.is_empty()
+        || (title.len() >= 2
+            && ((title.starts_with('"') && title.ends_with('"'))
+                || (title.starts_with('\'') && title.ends_with('\''))
+                || (title.starts_with('(') && title.ends_with(')'))));
+    if !titled {
+        return None;
+    }
+    let url = url.trim();
+    (!label.is_empty() && !url.is_empty()).then_some((
+        label,
+        url,
+        bang + 1 + close + 1 + 1 + used + shut + 1,
+    ))
+}
+
+/// The `]` that closes a `[`, counting the ones a label holds inside it.
+fn bracket(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (at, ch) in text.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '[' => depth += 1,
+            ']' if depth == 0 => return Some(at),
+            ']' => depth -= 1,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// An emphasis run starting at `at`: where its words are, the style they take, and
+/// where the run ends.
+///
+/// Longest marker first, so `***` is not read as bold `**` followed by a stray
+/// asterisk. A marker only opens on a word and only closes on one, which is the
+/// rule that keeps `api_key` an identifier instead of an italic `key`, and a run
+/// that never closes is not a run at all.
+fn emphasis(text: &str, at: usize, base: Style) -> Option<(usize, usize, Style, usize)> {
+    let marks: [(&str, Modifier); 7] = [
+        ("***", Modifier::BOLD | Modifier::ITALIC),
+        ("___", Modifier::BOLD | Modifier::ITALIC),
+        ("**", Modifier::BOLD),
+        ("__", Modifier::BOLD),
+        ("~~", Modifier::CROSSED_OUT),
+        ("*", Modifier::ITALIC),
+        ("_", Modifier::ITALIC),
+    ];
+    for (mark, modifier) in marks {
+        let rest = &text[at..];
+        if !rest.starts_with(mark) {
+            continue;
+        }
+        let ch = mark.chars().next().expect("a mark is a char");
+        let opens = rest[mark.len()..]
+            .chars()
+            .next()
+            .is_some_and(|c| !c.is_whitespace());
+        // Underscore in the middle of a word is part of the word.
+        let inner = ch == '_'
+            && text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric());
+        if !opens || inner {
+            continue;
+        }
+        let start = at + mark.len();
+        let mut from = start;
+        while let Some(found) = text[from..].find(mark) {
+            let stop = from + found;
+            let before = text[..stop].chars().next_back();
+            let after = text[stop + mark.len()..].chars().next();
+            // A longer run of the same character is that run's marker, not this
+            // one's, and a closer may not follow a space.
+            let longer = before == Some(ch) || after == Some(ch);
+            let spaced = before.is_none_or(char::is_whitespace);
+            let word = ch == '_' && after.is_some_and(char::is_alphanumeric);
+            if stop > start && !longer && !spaced && !word {
+                return Some((start, stop, base.add_modifier(modifier), stop + mark.len()));
+            }
+            from = stop + mark.len();
+        }
+    }
+    None
 }
 
 /// A call's head line, in the shape a call has: `write(src/main.rs)`,
@@ -2424,7 +2928,7 @@ fn framed(title: &str, body: &[Body], room: usize, indent: usize) -> Vec<Vec<Run
     if room < MIN_BOX {
         return body
             .iter()
-            .flat_map(|(_, runs)| wrap_runs(runs, room.max(1)))
+            .flat_map(|(_, runs)| wrap_plain(runs, room.max(1)))
             .map(|runs| {
                 let mut out = vec![(pad.clone(), Style::new())];
                 out.extend(runs);
@@ -2470,7 +2974,7 @@ fn framed(title: &str, body: &[Body], room: usize, indent: usize) -> Vec<Vec<Run
         // number: a continuation is the same line of the file, and numbering it
         // again would say it was another one.
         let blank = " ".repeat(gutter);
-        for (k, part) in wrap_runs(runs, inside.max(1)).into_iter().enumerate() {
+        for (k, part) in wrap_plain(runs, inside.max(1)).into_iter().enumerate() {
             let head = match (number, k) {
                 (Some(n), 0) => format!("{n:>digits$} \u{2502} "),
                 _ => blank.clone(),
@@ -2805,7 +3309,7 @@ pub fn wrap_lines(lines: &[Line<'static>], width: usize) -> Vec<Line<'static>> {
             .iter()
             .map(|s| (s.content.to_string(), s.style))
             .collect();
-        for wrapped in wrap_runs(&runs, width) {
+        for wrapped in wrap_plain(&runs, width) {
             out.push(Line::from(
                 wrapped
                     .into_iter()
@@ -3396,6 +3900,132 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_markdown_a_model_actually_writes_is_read() {
+        // The shapes real answers use and the flat parser could not: an autolink, a
+        // destination in angle brackets, an identifier, an ordered list, a heading
+        // with a marker inside it, a setext heading, an escaped marker, and a code
+        // span inside a bold run.
+        let answer = rows(&[
+            r#"{"type":"token","id":"a","data":{"state":"content","token":"<https://auto.test/x> and [youtube](<youtube.com>) and [two words](<https://x.test/a b>)\n\nset_cwd and api_key_name stay as they are\n\n1. first\n2. second\n\n## **bold** heading\n\nTitle\n=====\n\n\\*not italic\\* and **bold with `code`**"}}"#,
+        ]);
+        let piece = &pieces_at(&answer, &all_open(), &no_figures(), None, true)[0];
+        let text = piece.text();
+        assert!(text.contains("https://auto.test/x"), "{text}");
+        assert!(!text.contains('<'), "a bracket is still on the screen: {text}");
+        assert!(text.contains("youtube (youtube.com)"), "{text}");
+        assert!(text.contains("two words (https://x.test/a b)"), "{text}");
+        assert!(text.contains("set_cwd and api_key_name stay"), "{text}");
+        assert!(text.contains("1. first") && text.contains("2. second"), "{text}");
+        assert!(text.contains("bold heading"), "{text}");
+        assert!(!text.contains('#') && !text.contains("====="), "{text}");
+        assert!(text.contains("*not italic*"), "{text}");
+        let runs: Vec<&Run> = piece.lines.iter().flatten().collect();
+        // The autolink is a link and not three characters in front of one.
+        let auto = runs
+            .iter()
+            .find(|(t, _)| t == "https://auto.test/x")
+            .expect("the address is on the screen");
+        assert_eq!(auto.1.fg, Some(ink::link()));
+        assert!(auto.1.add_modifier.contains(Modifier::UNDERLINED));
+        // An underscore inside a word is part of the word.
+        assert!(
+            !runs.iter().any(|(t, s)| t.contains("api_key")
+                && s.add_modifier.contains(Modifier::ITALIC)),
+            "{runs:?}"
+        );
+        // The heading's own marker is read as the bold it is.
+        let heading = runs.iter().find(|(t, _)| t.contains("bold")).unwrap();
+        assert!(heading.1.add_modifier.contains(Modifier::BOLD));
+        // A code span inside a bold run keeps both: the code's colour and the weight.
+        let code = runs.iter().find(|(t, _)| t == "code").expect("the span is drawn");
+        assert_eq!(code.1.fg, Some(ink::code()));
+        assert!(code.1.add_modifier.contains(Modifier::BOLD), "{code:?}");
+    }
+
+    #[test]
+    fn a_table_with_alignment_and_a_two_tick_fence() {
+        // A model writes `|:---|---:|` for an aligned table, and quotes a block inside
+        // a block with two ticks: neither is a table row or prose.
+        let answer = rows(&[
+            r#"{"type":"token","id":"a","data":{"state":"content","token":"| a | b |\n|:---|---:|\n| 1 | 2 |\n\n``\nplain code\n``\n\n[docs](https://x \"the docs\")"}}"#,
+        ]);
+        let text = pieces_at(&answer, &all_open(), &no_figures(), None, true)[0].text();
+        assert!(!text.contains(":---"), "the alignment is still a row: {text}");
+        assert!(text.contains("plain code"), "{text}");
+        assert!(!text.contains("``"), "{text}");
+        assert!(text.contains("docs (https://x)"), "the title is not drawn: {text}");
+        assert!(!text.contains("the docs"), "{text}");
+    }
+
+    #[test]
+    fn a_marker_that_never_closes_is_left_as_written() {
+        // A half-written marker is not eaten and does not hang the parse: what came
+        // in is what goes out, one character at a time.
+        for line in [
+            "**", "***", "`", "``", "\\", "[", "](<", "!", "<https://x", "<>", "__", "~~",
+            "1.", "[a]", "**a", "a<b", "[a](<b", "[a](b \"t\"", "___x",
+        ] {
+            let runs = inline(line, Style::new());
+            let text: String = runs.iter().map(|(t, _)| t.as_str()).collect();
+            assert_eq!(text, line, "{line:?} came out as {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_link_is_clickable_where_it_is_drawn() {
+        let answer = rows(&[
+            r#"{"type":"token","id":"a","data":{"state":"content","token":"see [docs](https://x.test/a) here"}}"#,
+        ]);
+        let pieces = pieces_at(&answer, &all_open(), &no_figures(), None, true);
+        let drawn = draw(&pieces, 60);
+        let link = drawn
+            .links
+            .iter()
+            .find(|l| l.url == "https://x.test/a")
+            .expect("the link is on the screen");
+        // The columns are the ones the word was actually drawn at, not the ones it
+        // was written at: the row's lead is in front of it.
+        let text: String = drawn.lines[link.line]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        let start = text.char_indices().nth(link.col).expect("a column on the line").0;
+        assert!(text[start..].starts_with("docs"), "{text:?}");
+        // And the buffer says so, in the terminal's own spelling, with the width
+        // the cell still draws at.
+        let mut buf = Buffer::with_lines([text]);
+        hyperlinks(&mut buf, Rect::new(0, 0, 60, 1), 0, &drawn.links);
+        let cell = &buf[(link.col as u16, 0)];
+        assert!(cell.symbol().starts_with('\u{1b}'), "{:?}", cell.symbol());
+        assert!(cell.symbol().contains("https://x.test/a"), "{:?}", cell.symbol());
+        assert!(cell.symbol().ends_with("\u{1b}\\"), "{:?}", cell.symbol());
+        assert_eq!(cell.diff_option, CellDiffOption::ForcedWidth(NonZeroU16::new(1).unwrap()));
+        // What is beside the label is not part of it.
+        assert!(!buf[(link.col as u16 - 1, 0)].symbol().contains("https://"));
+    }
+
+    #[test]
+    fn the_space_before_a_link_is_not_part_of_it() {
+        let runs = inline("see [docs](https://x.test/a) here", Style::new());
+        let wrapped = wrap_plain(&runs, 60);
+        let underlined: String = wrapped[0]
+            .iter()
+            .filter(|(_, style)| style.add_modifier.contains(Modifier::UNDERLINED))
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(underlined, "docs");
+    }
+
+    #[test]
+    fn a_path_link_is_handed_to_the_terminal_as_a_file() {
+        assert_eq!(target("https://x.test/a"), "https://x.test/a");
+        assert_eq!(target("/tmp/a b.md"), "file:///tmp/a%20b.md");
+        // Prose is left alone: nothing is invented for it.
+        assert_eq!(target("not a path"), "not a path");
+    }
+
     /// A path is read the way a person reads one: from the directory this
     /// conversation is in, from home, and with its middle dropped only when what
     /// is left still fits. What a row has no room for is in full in the panel.
@@ -3961,7 +4591,7 @@ mod tests {
     fn wrapping_always_finishes() {
         for width in [1usize, 2, 3] {
             let runs: Vec<Run> = vec![("\u{8868}\u{8868}ab".to_string(), Style::new())];
-            let lines = wrap_runs(&runs, width);
+            let lines = wrap_plain(&runs, width);
             let text: String = lines.iter().flatten().map(|r| r.0.as_str()).collect();
             assert_eq!(
                 text, "\u{8868}\u{8868}ab",
@@ -4063,12 +4693,12 @@ mod tests {
     fn wrapping_keeps_its_spaces() {
         let runs: Vec<Run> = vec![("    return 1".to_string(), Style::new())];
         assert_eq!(
-            wrap_runs(&runs, 20)[0][0].0,
+            wrap_plain(&runs, 20)[0][0].0,
             "    return 1",
             "leading indent"
         );
         let runs: Vec<Run> = vec![("a      b".to_string(), Style::new())];
-        assert_eq!(wrap_runs(&runs, 20)[0][0].0, "a      b", "interior run");
+        assert_eq!(wrap_plain(&runs, 20)[0][0].0, "a      b", "interior run");
     }
 
     #[test]
@@ -4878,6 +5508,35 @@ mod tests {
         assert_eq!(plan.lines[0][2].1.fg, Some(ink::dim()));
         // The read is still counted; the plan is not a call that ran.
         assert!(!screen.iter().any(|l| l.contains("plan")), "{screen:?}");
+    }
+
+    #[test]
+    fn a_step_that_ticked_the_plan_three_times_draws_one_line() {
+        // Every `todo` call answers with the whole list, so a step that moved it three
+        // times answered three times: a line saying `0/2 done` is the same plan as the
+        // last one with fewer ticks on it.
+        let step = rows(&[
+            r#"{"type":"token","id":"a","data":{"state":"thinking","token":"porting the composer"}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_calls","token":[{"name":"todo","args":{"action":"plan","steps":["read the tool","port the composer"]}}]}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_output","token":"todo","result":{"result":{"todo":[{"id":1,"text":"read the tool","state":"pending"},{"id":2,"text":"port the composer","state":"pending"}],"summary":"0/2 done","open":2}}}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_calls","token":[{"name":"todo","args":{"action":"start","id":1}}]}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_output","token":"todo","result":{"result":{"todo":[{"id":1,"text":"read the tool","state":"in_progress"},{"id":2,"text":"port the composer","state":"pending"}],"summary":"0/2 done","open":2,"current":{"id":1,"text":"read the tool","state":"in_progress"}}}}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_calls","token":[{"name":"todo","args":{"action":"done","id":1}}]}}"#,
+            r#"{"type":"token","id":"a","data":{"state":"tool_output","token":"todo","result":{"result":{"todo":[{"id":1,"text":"read the tool","state":"done"},{"id":2,"text":"port the composer","state":"in_progress"}],"summary":"1/2 done","open":1,"current":{"id":2,"text":"port the composer","state":"in_progress"}}}}}"#,
+        ]);
+        let pieces = pieces_at(&step, &|_, _| false, &no_figures(), None, true);
+        let screen: Vec<String> = draw(&pieces, 40)
+            .lines
+            .iter()
+            .map(Line::to_string)
+            .collect();
+        assert_eq!(
+            screen,
+            vec![
+                "\u{25cf} porting the composer",
+                "  \u{2514} 1/2 done \u{b7} port the composer",
+            ]
+        );
     }
 
     #[test]
